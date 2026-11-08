@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#ffffff">
+<title>Календарь-круг</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<link rel="stylesheet" href="style.css">
+<script src="app.js" defer></script>
+</head>
+<body>
+<header class="bar">
+  <button id="back" class="back" type="button" hidden>← Назад</button>
+  <div id="today" class="today"></div>
+</header>
+
+<main class="stage">
+  <svg id="wheel" viewBox="-45 -45 1690 1690" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Годовой круг">
+    <defs>
+      <clipPath id="coreclip"><circle cx="800" cy="800" r="482"/></clipPath>
+      <filter id="sh" x="-20%" y="-20%" width="140%" height="140%">
+        <feDropShadow dx="0" dy="4" stdDeviation="5" flood-opacity="0.18"/>
+      </filter>
+    </defs>
+    <g id="base"></g>
+    <g id="overlay"></g>
+  </svg>
+</main>
+
+<p id="hint" class="hint"></p>
+
+<dialog id="menu">
+  <div id="menuHead" class="menu-head"></div>
+  <div id="menuActions" class="menu-actions"></div>
+</dialog>
+
+<dialog id="form">
+  <form id="eventForm" method="dialog" autocomplete="off">
+    <h2 id="formTitle">Новое событие</h2>
+
+    <label class="field">Название
+      <input name="title" maxlength="14" required>
+    </label>
+
+    <div class="field">
+      <span id="startLabel">Дата</span>
+      <div class="row">
+        <select name="day" aria-label="Число"></select>
+        <select name="month" aria-label="Месяц"></select>
+      </div>
+    </div>
+
+    <div class="field period-only">
+      <span>Конец</span>
+      <div class="row">
+        <select name="endDay" aria-label="Число конца"></select>
+        <select name="endMonth" aria-label="Месяц конца"></select>
+      </div>
+    </div>
+
+    <label class="check event-only">
+      <input type="checkbox" name="approx">
+      <span>примерно <small>(число не выделяется)</small></span>
+    </label>
+
+    <fieldset class="event-only">
+      <legend>Иконка</legend>
+      <div id="iconGrid" class="icons"></div>
+    </fieldset>
+
+    <fieldset class="event-only repeat">
+      <label class="check"><input type="radio" name="repeat" value="yearly"> каждый год</label>
+      <label class="check"><input type="radio" name="repeat" value="once"> только в <span id="onceYear"></span> году</label>
+    </fieldset>
+
+    <div class="actions">
+      <button type="button" id="formCancel">Отмена</button>
+      <button type="submit" class="primary">Сохранить</button>
+    </div>
+  </form>
+</dialog>
+</body>
+</html>
