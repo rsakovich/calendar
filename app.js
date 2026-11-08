@@ -636,8 +636,7 @@ function renderOverlay() {
 
 function plusButton({ m, d }) {
   const u = 1 / pxPerUnit();                  // svg units per screen pixel
-  const label = `+ ${dateText(m, d)}`;
-  const bw = textW(label, 800, 20) + 40, bh = 52;
+  const bw = 56, bh = 56;                     // a round "+" button
   const a = dateAngle(m, d), t = a * Math.PI / 180;
   const n = days[m], c0 = cellStart(m, d);
   // keep the whole button inside the ring, 14 px clear of it
@@ -648,8 +647,8 @@ function plusButton({ m, d }) {
   cy = Math.min(Math.max(cy, vb.y + bh * u / 2 + pad), vb.y + vb.h - bh * u / 2 - pad);
   return `<path d="${sectorPath(c0, c0 + 30 / n, R_DAY, R_OUT)}" fill="none" stroke="#1f5fd1" stroke-width="${f1(4 * u)}"/>` +
     `<g data-plus="1" transform="translate(${f1(cx - bw * u / 2)},${f1(cy - bh * u / 2)}) scale(${u.toFixed(4)})">` +
-    `<rect width="${f1(bw)}" height="${bh}" rx="26" fill="#1f5fd1" filter="url(#sh)"/>` +
-    `<text class="plus" x="${f1(bw / 2)}" y="${bh / 2}">${esc(label)}</text></g>`;
+    `<circle cx="${bw / 2}" cy="${bh / 2}" r="${bw / 2}" fill="#1f5fd1" filter="url(#sh)"/>` +
+    `<path d="M${bw / 2 - 12},${bh / 2} H${bw / 2 + 12} M${bw / 2},${bh / 2 - 12} V${bh / 2 + 12}" stroke="#fff" stroke-width="4.5" stroke-linecap="round"/></g>`;
 }
 
 function renderChrome() {
@@ -715,8 +714,8 @@ function onTap(clientX, clientY) {
     return;
   }
 
-  // a day: on the ring itself, or anywhere around the ring once a month is zoomed in
-  if (r >= R_DAY - 6 || view.t === 'month') {
+  // a day: only a tap on the day ring itself
+  if (r >= R_DAY - 6) {
     const rel = mod(a - (m * 30 - 15), 360);
     const d = Math.min(days[m], Math.floor(rel / 30 * days[m]) + 1);
     raiseIds(shownEvents().filter((e) => e.month - 1 === m && clampDay(m, e.day) === d).map((e) => e.id));
@@ -726,7 +725,9 @@ function onTap(clientX, clientY) {
     return;
   }
 
-  if (!(view.t === 'month' && view.m === m)) navigate({ t: 'month', m, sel: null });
+  // the month area: zoom into that month; inside the zoomed month it just hides the "+"
+  if (view.t === 'month' && view.m === m) { if (view.sel) replaceView({ t: 'month', m, sel: null }); }
+  else navigate({ t: 'month', m, sel: null });
 }
 
 /* Single taps, double tap (back to the whole circle), pinch (same). */
@@ -889,9 +890,7 @@ function openForm(ev, date) {
     match = form.querySelector('input[name="icon"]');
   }
   match.checked = true;
-  const onceYear = ev && ev.year ? ev.year : year;
-  $('onceYear').textContent = String(onceYear);
-  F.repeat.value = ev && ev.year ? 'once' : 'yearly';
+  F.yearly.checked = !(ev && ev.year);
   formDlg.showModal();
   if (!ev) F.title.focus();
 }
@@ -913,7 +912,7 @@ function onSave(e) {
   if (isPeriod) {
     item.endMonth = +F.endMonth.value;
     item.endDay = +F.endDay.value;
-  } else if (F.repeat.value === 'once') {
+  } else if (!F.yearly.checked) {
     item.year = editing && editing.year ? editing.year : year;
   }
   if (editing) items = items.map((x) => (x.id === editing.id ? item : x));
