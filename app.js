@@ -16,7 +16,8 @@ const R_MON0 = 482;         // month-name ring: R_MON0..R_EV1
 const R_CORE = R_MON0;      // season pictures: 0..R_CORE
 const RV = R_DAY - 20;      // holiday band radius
 const RV_W = 34;            // holiday band width
-const TODAY_OUT = R_OUT + 30;              // today's cell sticks out this far
+const TODAY_SCALE = 1.5;                   // today's cell and number vs. an ordinary day
+const TODAY_OUT = (R_DAY + R_OUT) / 2 + (R_OUT - R_DAY) * TODAY_SCALE / 2;   // its outer edge
 const FULL_BOX = { x: -45, y: -45, w: 1690, h: 1690 };
 const CARD_H = 66;
 const CARD_PX = 13;         // cards stop growing once their name is this many screen px
@@ -588,14 +589,18 @@ function renderBase() {
     }
   }
 
-  // today: a wider cell sticking out past the edge, thick dark frame, same fill
+  // today: the cell grown 1.5× around its own centre, dark frame, same fill;
+  // the number stays where it is, 1.5× larger
   {
     const { m, d } = today;
-    const span = 30 / days[m], mid = cellStart(m, d) + span / 2, half = span * 0.85;
+    const span = 30 / days[m], mid = cellStart(m, d) + span / 2, half = span * TODAY_SCALE / 2;
+    const rMid = (R_DAY + R_OUT) / 2, rHalf = (R_OUT - R_DAY) * TODAY_SCALE / 2;
     const isHl = hl.has(`${m}-${d}`);
-    const [x, y] = pt(mid, (R_DAY + TODAY_OUT) / 2);
+    const [x, y] = pt(mid, rMid);
     const rot = mod(mid, 360) < 180 ? mid - 90 : mid + 90;
-    out.push(`<path d="${sectorPath(mid - half, mid + half, R_DAY - 2, TODAY_OUT)}" fill="${isHl ? HL_COL : DAY_COL[SEASON_OF[m]]}" stroke="#1d1d1f" stroke-width="5" stroke-linejoin="round"/>`);
+    // the cell is so narrow that a rotated rounded rectangle matches the ring's curve
+    const w = rMid * 2 * half * Math.PI / 180, h = 2 * rHalf;
+    out.push(`<rect x="${f1(-w / 2)}" y="${f1(-h / 2)}" width="${f1(w)}" height="${f1(h)}" rx="6" transform="translate(${f1(x)},${f1(y)}) rotate(${f1(mid)})" fill="${isHl ? HL_COL : DAY_COL[SEASON_OF[m]]}" stroke="#1d1d1f" stroke-width="3"/>`);
     out.push(`<text class="dnum now" fill="${isHl ? '#fff' : '#1d1d1f'}" style="fill:${isHl ? '#fff' : '#1d1d1f'}" transform="translate(${f1(x)},${f1(y)}) rotate(${f1(rot)})">${d}</text>`);
   }
 
