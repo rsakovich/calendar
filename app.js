@@ -517,11 +517,13 @@ function eventsByMonth() {
 let labels = [];         // month label boxes, chosen at full size
 let fullCards = [];      // card layout at full size
 
-/* Lower is better: cards with no spot off the names are the worst, then stacked
-   cards, then leader length. */
+/* Lower is better: cards with no spot off the names are the worst; otherwise leader
+   length, a card partly covering another counting as STACK_COST longer: a card near its
+   date, overlapping a neighbour, beats one far away. */
+const STACK_COST = 150;
 function layoutCost(pl) {
   let k = 0;
-  for (const p of pl) k += (p.noSpot ? 1e8 : 0) + (p.stacked ? 1e6 : 0) + Math.hypot(p.cx - p.ax, p.cy - p.ay);
+  for (const p of pl) k += (p.noSpot ? 1e8 : 0) + (p.stacked ? STACK_COST : 0) + Math.hypot(p.cx - p.ax, p.cy - p.ay);
   return k;
 }
 
