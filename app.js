@@ -30,14 +30,18 @@ const FULL_BOX = { x: -45, y: -45, w: 1690, h: 1690 };
 const CARD_H = 72;          // icon on top, name (ENAME_FS) under it
 const CARD_K = 1.5;         // cards are drawn this much larger than their base size
 const MON_FS = 43.7, MONPL_FS = 34.3;   // month names, Russian and Polish (also in style.css)
+const MON_H = 126;                      // month name box: Russian, Polish, then the month's number
 const ENAME_FS = 22.1;      // card title (also in style.css); the icon stays 27
 const TODAY_NUM_K = 1.5;    // today's number is this much larger than the other day numbers
 const CARD_REACH = 40;      // a card is looked for this many degrees either side of its date
 const CARD_DETOUR = 60;     // a card never sits further than this past its nearest spot: rather overlap
 const CARD_DETOUR_NEAR = 40; // the same when zoomed in, where cards should hug their dates more
                             // (both at full card size: they shrink with the cards)
+const NAME_OUT = 15, NAME_OUT_COST = 4;   // a month name steps out from the centre at most this far, each unit costing this much leader
+const NAME_DETOUR = 120;    // past this much further than the nearest spot, a card rather covers a month name
 const cardDetour = (s) => (s < 0.999 ? CARD_DETOUR_NEAR : CARD_DETOUR) * s;
 const CARD_AWAY = 1.5;      // a spot whose centre lies in another month counts as this many card heights further
+const CARD_AWAY_FULL = 0.3; // the same on the whole circle, where a card is wider than a few days and room is short
 const FONT = getComputedStyle(document.documentElement).getPropertyValue('--font').trim()
   || 'Inter, system-ui, Roboto, sans-serif';
 
@@ -293,7 +297,7 @@ function boxOk(m, b, r0, r1, n, rbs, spill = 0) {
 }
 
 function monthLabelSize(m) {
-  return [Math.max(textW(MONTHS[m], 800, MON_FS), textW(MONTHS_PL[m], 600, MONPL_FS)) + 12, 91];
+  return [Math.max(textW(MONTHS[m], 800, MON_FS), textW(MONTHS_PL[m], 600, MONPL_FS)) + 12, MON_H];
 }
 function labelCands(m, rbs) {
   const key = `L|${m}`;
@@ -316,7 +320,12 @@ function labelCands(m, rbs) {
   return out;
 }
 
-const cardBaseW = (ev) => Math.max(textW(ev.title, 800, ENAME_FS), 30) + 22;
+/* On a card, a title longer than 13 characters ("Rayman Retold") is cut short with "…"
+   (the full one is in the form). */
+const CARD_TITLE_MAX = 13;
+const cardTitle = (ev) => ([...ev.title].length > CARD_TITLE_MAX
+  ? [...ev.title].slice(0, CARD_TITLE_MAX - 1).join('').trimEnd() + '…' : ev.title);
+const cardBaseW = (ev) => Math.max(textW(cardTitle(ev), 800, ENAME_FS), 30) + 22;
 
 /* A card may sit anywhere in the event zone (any month's), off the holiday bands. */
 const ringOk = (b, rbs) => boxOk(0, b, R_MON0 + 4, R_DAY - 4, 20, rbs, Infinity);
@@ -337,7 +346,8 @@ function sortedCands(a0, w, h, s, rbs, ax, ay) {
   if (out) return out;
   out = [];
   const mStart = Math.floor((a0 + 15) / 30) * 30 - 15;
-  const away = (a) => (a < mStart || a > mStart + 30 ? CARD_AWAY * h : 0);
+  const k = s < 0.999 ? CARD_AWAY : CARD_AWAY_FULL;
+  const away = (a) => (a < mStart || a > mStart + 30 ? k * h : 0);
   const aStep = Math.max(0.5, s), rStep = Math.max(3, 8 * s);
   for (let a = a0 - CARD_REACH; a <= a0 + CARD_REACH + 1e-6; a += aStep) {
     for (let r = R_MON0 + 4 + h / 2; r < R_DAY - 4 - h / 2 + 1e-6; r += rStep) {
@@ -373,8 +383,11 @@ function layoutCards(evs, s, rbs, names, strict = true, quick = false) {
     // the nearest spot off the names; a free spot much further than that is too far:
     // then the card stays near its date and overlaps its neighbours instead
     const first = all.find(offName);
-    const maxL = (first ? first.L : 0) + cardDetour(s);
-    for (const q of all) {
+    // names never move outwards, so every spot near a date may be on one: then the card
+    // stays near its date anyway, covering as little of the name as it can
+    const onName = !first || first.L > (all.length ? all[0].L : 0) + NAME_DETOUR * s;
+    const maxL = (onName ? (all.length ? all[0].L : 0) : first.L) + cardDetour(s);
+    for (const q of onName ? [] : all) {
       const { c } = q;
       if (q.L > maxL) break;
       if (!offName(q)) continue;
@@ -389,19 +402,20 @@ function layoutCards(evs, s, rbs, names, strict = true, quick = false) {
     let stacked = false, noSpot = false, scored = null;
     if (!best) {
       stacked = true;
-      scored = all.filter((q) => q.L <= maxL && offName(q));
-      noSpot = !scored.length;
-      if (noSpot) scored = all;
+      scored = all.filter((q) => q.L <= maxL && (onName || offName(q)));
+      noSpot = onName || !scored.length;
+      if (!scored.length) scored = all;
+      const obst = onName ? [...placed.map((p) => p.b), ...nb] : placed.map((p) => p.b);
       if (quick) scored = scored.slice(0, 1);   // just counting: the nearest will do
       let bestScore = Infinity;
       // overlap is allowed, but no card may be mostly hidden: at most 45% of the smaller one
       for (const limit of [0.45, 0.7, 1.01]) {
         for (const { c, L } of scored) {
           let o = 0, worst = 0;
-          for (const p of placed) {
-            const a = overlapArea(c.b, p.b);
+          for (const b of obst) {
+            const a = overlapArea(c.b, b);
             o += a;
-            worst = Math.max(worst, a / Math.min(c.b[2] * c.b[3], p.b[2] * p.b[3]));
+            worst = Math.max(worst, a / Math.min(c.b[2] * c.b[3], b[2] * b[3]));
           }
           if (worst > limit) continue;
           const score = o / (s * s) + L / s;
@@ -497,9 +511,11 @@ function bestLayout(evs, s, rbs, names, quick = false) {
   }
   if (!quick && countStacked(best)) {
     for (const p of best) {
-      const off = sortedCands(dateAngle(p.m, p.d), p.b[2], p.b[3], s, rbs, p.ax, p.ay)
-        .filter(({ c }) => !names.some((o) => ov(c.b, o, 4 * s)));
-      p.scored = off.length ? off.filter((q) => q.L <= off[0].L + cardDetour(s)) : off;
+      const all = sortedCands(dateAngle(p.m, p.d), p.b[2], p.b[3], s, rbs, p.ax, p.ay);
+      const off = all.filter(({ c }) => !names.some((o) => ov(c.b, o, 4 * s)));
+      // as in layoutCards: when the nearest spot off the names is far, a name may be covered
+      const near = off.length && off[0].L <= all[0].L + NAME_DETOUR * s ? off : all;
+      p.scored = near.length ? near.filter((q) => q.L <= near[0].L + cardDetour(s)) : near;
     }
     spreadOut(best, s, names);
     for (const p of best) delete p.scored;
@@ -517,11 +533,18 @@ function eventsByMonth() {
 let labels = [];         // month label boxes, chosen at full size
 let fullCards = [];      // card layout at full size
 
-/* Lower is better: cards with no spot off the names are the worst, then stacked
-   cards, then leader length. */
+/* Lower is better: cards covering a month name are the worst; otherwise leader
+   length, a card partly covering another counting as STACK_COST longer: a card near its
+   date, overlapping a neighbour, beats one far away. */
+const STACK_COST = 150;
+const NAME_COVER_COST = 1000;   // per unit² of a month name under a card
 function layoutCost(pl) {
   let k = 0;
-  for (const p of pl) k += (p.noSpot ? 1e8 : 0) + (p.stacked ? 1e6 : 0) + Math.hypot(p.cx - p.ax, p.cy - p.ay);
+  for (const p of pl) {
+    // a card on a month name: the worst, by how much of the name it covers
+    const onName = p.noSpot ? labels.reduce((a, o) => a + overlapArea(p.b, o), 0) : 0;
+    k += NAME_COVER_COST * onName + (p.stacked ? STACK_COST : 0) + Math.hypot(p.cx - p.ax, p.cy - p.ay);
+  }
   return k;
 }
 
@@ -535,9 +558,12 @@ function computeFull() {
   for (let m = 0; m < 12; m++) home[m] = labelCands(m, rbs)[0];
   labels = [...home];
   let pl = bestLayout(evs, 1, rbs, labels, true);
-  // ...but a name that keeps a card away from its date may step aside (along its month, or
-  // outwards), as long as that brings the cards nearer than it moves the name
-  const moved = (m, b) => 0.5 * Math.hypot(b[0] - home[m][0], b[1] - home[m][1]);
+  // ...but a name that keeps a card away from its date may step aside along its month (hardly
+  // outwards: names hug the centre), as long as that brings the cards nearer than it moves the
+  // name; a step outwards costs much more than one along the month
+  const rOf = (b) => polar(b[0] + b[2] / 2, b[1] + b[3] / 2).r;
+  const moved = (m, b) => 0.5 * Math.hypot(b[0] - home[m][0], b[1] - home[m][1]) +
+    NAME_OUT_COST * Math.max(0, rOf(b) - rOf(home[m]));
   const near = (m) => [-1, 0, 1].flatMap((k) => by[mod(m + k, 12)]);
   let budget = 1200;   // cards laid out in trials, in all (a count, not a time: the layout must not jump)
   for (let sweep = 0; sweep < 3 && budget > 0; sweep++) {
@@ -555,7 +581,9 @@ function computeFull() {
       let pick = keep;
       let cost = layoutCost(bestLayout(local, 1, rbs, labels, true)) + moved(m, keep);
       // up to 30 spots, spread over everything within reach
-      const reach = labelCands(m, rbs).filter((b) => b !== keep && moved(m, b) <= 150);
+      // sideways only: a name in a tight spot may step out a little (NAME_OUT) to slide along
+      const reach = labelCands(m, rbs).filter((b) => b !== keep &&
+        0.5 * Math.hypot(b[0] - home[m][0], b[1] - home[m][1]) <= 150 && rOf(b) <= rOf(home[m]) + NAME_OUT);
       const step = Math.ceil(reach.length / 30);
       const cands = reach.filter((b, i) => i % step === 0);
       for (const lab of cands) {
@@ -655,10 +683,10 @@ function setVB(b) {
   svg.classList.toggle('far', b.w >= NEAR_W);   // year/season scale: hide day numbers
   liveCards(b);
 }
-/* While zooming (pinch, wheel, animation) the cards keep their size on screen, each about
+/* While zooming (pinch, wheel, animation) the cards follow cardScaleAt() on screen, each about
    its centre; once the zoom settles they are laid out again at that size. */
 function liveCards(b) {
-  const s = Math.min(1, b.w / FULL_BOX.w);
+  const s = cardScaleAt(b.w);
   for (const el of overlayG.querySelectorAll('.card')) {
     el.setAttribute('transform', `translate(${el.dataset.c}) scale(${(s * CARD_K).toFixed(4)})`);
   }
@@ -668,8 +696,15 @@ function liveCards(b) {
   }
 }
 const pxPerUnit = () => (svg.clientWidth || 360) / vb.w;
-/* Cards keep the on-screen size they have on the whole circle: zooming in does not enlarge them. */
-const cardScale = () => Math.min(1, vb.w / FULL_BOX.w);
+/* Card size (1 = full size, in circle units) for a view box of width w: on screen the cards
+   grow only a little while zooming in, up to CARD_NEAR_K times their whole-circle size once a
+   month (MONTH_W across) fills the screen. */
+const CARD_NEAR_K = 1.5, MONTH_W = 530;
+function cardScaleAt(w) {
+  const t = Math.min(1, Math.max(0, (FULL_BOX.w - w) / (FULL_BOX.w - MONTH_W)));
+  return Math.min(1, w / FULL_BOX.w * (1 + (CARD_NEAR_K - 1) * t));
+}
+const cardScale = () => cardScaleAt(vb.w);
 
 function viewMonths(v) {
   if (v.t === 'free') {          // every month with a part inside the box
@@ -810,12 +845,13 @@ function renderBase() {
   }
   out.push(`<circle cx="${C}" cy="${C}" r="${R_CORE}" fill="none" stroke="#fff" stroke-width="7"/>`);
 
-  // month names: Russian, Polish under it
+  // month names: Russian, Polish under it, then the month's number
   for (let m = 0; m < 12; m++) {
     const [x0, y0, w] = labels[m];
     const cx = x0 + w / 2;
     out.push(`<text class="mon" x="${f1(cx)}" y="${f1(y0 + 42)}">${MONTHS[m]}</text>` +
-      `<text class="monpl" x="${f1(cx)}" y="${f1(y0 + 81)}">${MONTHS_PL[m]}</text>`);
+      `<text class="monpl" x="${f1(cx)}" y="${f1(y0 + 81)}">${MONTHS_PL[m]}</text>` +
+      `<text class="monnum" x="${f1(cx)}" y="${f1(y0 + 117)}">${m + 1}</text>`);
   }
 
   // multi-day events: bands, with as much of "icon title" as fits
@@ -914,7 +950,7 @@ function renderOverlay() {
       `<g transform="translate(${f1(-bw / 2)},${-CARD_H / 2})">` +
       `<rect width="${f1(bw)}" height="${CARD_H}" rx="15" fill="#fff" stroke="${CARD_COL[SEASON_OF[c.m]]}" stroke-width="4" filter="url(#sh)"/>` +
       `<text class="emo" x="${f1(bw / 2)}" y="32">${esc(c.ev.icon)}</text>` +
-      `<text class="ename" x="${f1(bw / 2)}" y="62">${esc(c.ev.title)}</text></g></g>`);
+      `<text class="ename" x="${f1(bw / 2)}" y="62">${esc(cardTitle(c.ev))}</text></g></g>`);
   }
 
   if (pickId !== null) out.push(pickButtons(cards));
