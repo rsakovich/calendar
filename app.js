@@ -12,12 +12,12 @@ const C = 800;
 const R_OUT = 795;          // outer edge
 const R_DAY = 752;          // day-number ring: R_DAY..R_OUT
 const R_EV1 = 540;          // event zone: R_EV1..R_DAY
-const R_MON0 = 482;         // month-name ring: R_MON0..R_EV1
+const R_MON0 = 386;         // month-name ring: R_MON0..R_EV1 (the season core is 20% smaller than before)
 const R_CORE = R_MON0;      // season pictures: 0..R_CORE
-const RV = R_DAY - 20;      // outer band (lane 0) radius
-const RV_W = 34;            // band width
+const RV = R_DAY - 29;      // outer band (lane 0) radius
+const RV_W = 51;            // band width
 const RV_GAP = 6;           // gap between band lanes
-const MAX_LANES = 4;        // lanes towards the centre; more bands share the last one
+const MAX_LANES = 3;        // lanes towards the centre; more bands share the last one
 const RIBBON_COL = ['#6b9be0', '#6fbf55', '#ff9f1c', '#e88a3a'];   // default: by the start month's season
 const BAND_COLORS = ['#ff9f1c', '#e88a3a', '#e0475b', '#e86aa6', '#8e6bd8', '#6b9be0', '#1fa89a', '#6fbf55', '#a0713d', '#7a7a7a'];
 const bandColor = (e) => e.color || RIBBON_COL[SEASON_OF[e.month - 1]];
@@ -25,6 +25,7 @@ const TODAY_SCALE = 1.5;                   // today's cell and number vs. an ord
 const TODAY_OUT = (R_DAY + R_OUT) / 2 + (R_OUT - R_DAY) * TODAY_SCALE / 2;   // its outer edge
 const FULL_BOX = { x: -45, y: -45, w: 1690, h: 1690 };
 const CARD_H = 66;
+const CARD_K = 1.5;         // cards are drawn this much larger than their base size
 const CARD_PX = 13;         // cards stop growing once their name is this many screen px
 const FONT = getComputedStyle(document.documentElement).getPropertyValue('--font').trim()
   || 'Inter, system-ui, Roboto, sans-serif';
@@ -271,7 +272,7 @@ function boxOk(m, b, r0, r1, n, rbs) {
     if (r >= r1) return false;
     if (r > rmax) rmax = r;
     const rel = mod(Math.atan2(dx, -dy) * 57.29577951308232 - start, 360);
-    if (!(rel > 1.5 && rel < 28.5)) return false;
+    if (!(rel > 1 && rel < 29)) return false;
   }
   const rmin = Math.hypot(Math.max(x0 - C, 0, C - x0 - w), Math.max(y0 - C, 0, C - y0 - h));
   if (rmin <= r0) return false;
@@ -289,7 +290,7 @@ function boxOk(m, b, r0, r1, n, rbs) {
 }
 
 function monthLabelSize(m) {
-  return [Math.max(textW(MONTHS[m], 800, 28), textW(MONTHS_PL[m], 600, 22)) + 10, 58];
+  return [Math.max(textW(MONTHS[m], 800, 33.6), textW(MONTHS_PL[m], 600, 26.4)) + 12, 70];
 }
 function labelCands(m, rbs) {
   const key = `L|${m}`;
@@ -329,10 +330,10 @@ function cardCands(m, w, h, s, rbs) {
   out = [];
   const aStep = Math.max(0.5, s), rStep = Math.max(3, 8 * s);
   for (let a = m * 30 - 14; a <= m * 30 + 14 + 1e-6; a += aStep) {
-    for (let r = R_EV1 + 8 + h / 2; r < R_DAY - 8 - h / 2 + 1e-6; r += rStep) {
+    for (let r = R_MON0 + 4 + h / 2; r < R_DAY - 4 - h / 2 + 1e-6; r += rStep) {
       const [x, y] = pt(a, r);
       const b = [x - w / 2, y - h / 2, w, h];
-      if (boxOk(m, b, R_EV1 + 8, R_DAY - 8, 20, rbs)) out.push({ x, y, b });
+      if (boxOk(m, b, R_MON0 + 4, R_DAY - 4, 20, rbs)) out.push({ x, y, b });
     }
   }
   candCache.set(key, out);
@@ -354,11 +355,11 @@ function sortedCands(m, d, w, h, s, rbs, ax, ay) {
 
 /* Greedy placement, earliest date first: each card takes the free spot with the
    shortest leader line. Cards with no free spot are stacked under the others. */
-function layoutMonth(m, evs, s, label, rbs) {
+function layoutMonth(m, evs, s, label, rbs, strict = true) {
   const placed = [];
-  const gap = 8 * s;
+  const gap = 4 * s;
   for (const ev of evs) {
-    const w = cardBaseW(ev) * s, h = CARD_H * s;
+    const w = cardBaseW(ev) * s * CARD_K, h = CARD_H * s * CARD_K;
     const d = clampDay(m, ev.day);
     const [ax, ay] = pt(dateAngle(m, d), R_DAY);
     const scored = sortedCands(m, d, w, h, s, rbs, ax, ay)
@@ -368,8 +369,9 @@ function layoutMonth(m, evs, s, label, rbs) {
     for (const { c } of scored) {
       if (free.some((p) => ov(c.b, p.b, gap))) continue;
       if (label && segHits(ax, ay, c.x, c.y, label, 3 * s)) continue;
-      if (free.some((p) => segHits(ax, ay, c.x, c.y, p.b, 4 * s))) continue;
-      if (free.some((p) => segHits(p.ax, p.ay, p.cx, p.cy, c.b, 4 * s))) continue;
+      // leader lines normally keep clear of other cards; when space is short they may pass under them
+      if (strict && free.some((p) => segHits(ax, ay, c.x, c.y, p.b, 4 * s))) continue;
+      if (strict && free.some((p) => segHits(p.ax, p.ay, p.cx, p.cy, c.b, 4 * s))) continue;
       best = c;
       break;
     }
@@ -377,29 +379,122 @@ function layoutMonth(m, evs, s, label, rbs) {
     if (!best) {
       stacked = true;
       let bestScore = Infinity;
-      for (const { c, L } of scored) {
-        let o = 0;
-        for (const p of placed) o += overlapArea(c.b, p.b);
-        const score = o / (s * s) + L / s;
-        if (score < bestScore) { bestScore = score; best = c; }
+      // overlap is allowed, but no card may be mostly hidden: at most 45% of the smaller one
+      for (const limit of [0.45, 0.7, 1.01]) {
+        for (const { c, L } of scored) {
+          let o = 0, worst = 0;
+          for (const p of placed) {
+            const a = overlapArea(c.b, p.b);
+            o += a;
+            worst = Math.max(worst, a / Math.min(c.b[2] * c.b[3], p.b[2] * p.b[3]));
+          }
+          if (worst > limit) continue;
+          const score = o / (s * s) + L / s;
+          if (score < bestScore) { bestScore = score; best = c; }
+        }
+        if (best) break;
       }
       if (!best) {
         const [x, y] = pt(dateAngle(m, d), (R_EV1 + R_DAY) / 2);
         best = { x, y, b: [x - w / 2, y - h / 2, w, h] };
       }
     }
-    placed.push({ ev, m, d, b: best.b, cx: best.x, cy: best.y, ax, ay, stacked, s });
+    placed.push({ ev, m, d, b: best.b, cx: best.x, cy: best.y, ax, ay, stacked, s, scored, noSpot: !scored.length });
   }
+  if (placed.some((p) => p.stacked)) spreadOut(placed, s);
+  for (const p of placed) delete p.scored;
   return placed;
 }
 
+/* Not everything fits: let the cards overlap as little as possible. Each card in
+   turn moves to the spot (off the month name) that gives the least overlap with
+   the others, no card ever being mostly hidden, then keeps a short leader line. */
+function spreadOut(placed, s) {
+  const area = (b) => b[2] * b[3];
+  const cost = (i, c, L) => {
+    let o = 0, worst = 0, cross = 0;
+    for (let j = 0; j < placed.length; j++) {
+      if (j === i) continue;
+      const q = placed[j];
+      const a = overlapArea(c.b, q.b);
+      o += a;
+      worst = Math.max(worst, a / Math.min(area(c.b), area(q.b)));
+      if (segHits(placed[i].ax, placed[i].ay, c.x, c.y, q.b, 4 * s)) cross++;
+      if (segHits(q.ax, q.ay, q.cx, q.cy, c.b, 4 * s)) cross++;
+    }
+    return o / (s * s) + 1.0 * L / s + 250 * cross + (worst > 0.45 ? 2e5 * (worst - 0.45) : 0);
+  };
+  // simulated annealing over the candidate spots (fixed seed: the layout is repeatable)
+  let seed = 12345;
+  const rnd = () => (seed = (seed * 1664525 + 1013904223) % 4294967296) / 4294967296;
+  const cur = placed.map((p) => ({ b: p.b, x: p.cx, y: p.cy }));
+  const at = (i) => ({ b: cur[i].b, x: cur[i].x, y: cur[i].y });
+  const total = () => placed.reduce((a, p, i) => {
+    const q = at(i);
+    return a + cost2(i, q, Math.hypot(q.x - p.ax, q.y - p.ay));
+  }, 0);
+  const cost2 = (i, c, L) => {
+    // like cost(), but against the current (not yet applied) positions of the others
+    let o = 0, worst = 0, cross = 0;
+    for (let j = 0; j < placed.length; j++) {
+      if (j === i) continue;
+      const q = cur[j];
+      const a = overlapArea(c.b, q.b);
+      o += a;
+      worst = Math.max(worst, a / Math.min(area(c.b), area(q.b)));
+      if (segHits(placed[i].ax, placed[i].ay, c.x, c.y, q.b, 4 * s)) cross++;
+      if (segHits(placed[j].ax, placed[j].ay, q.x, q.y, c.b, 4 * s)) cross++;
+    }
+    return o / (s * s) + 1.0 * L / s + 250 * cross + (worst > 0.45 ? 2e5 * (worst - 0.45) : 0);
+  };
+  const movable = placed.map((p, i) => i).filter((i) => placed[i].scored.length);
+  let now = total(), bestTotal = now, bestState = cur.map((c) => ({ ...c }));
+  const steps = 600 * Math.max(1, movable.length);
+  for (let k = 0; k < steps && movable.length; k++) {
+    const T = 3000 * Math.pow(0.003, k / steps);
+    const i = movable[Math.floor(rnd() * movable.length)];
+    const { c, L } = placed[i].scored[Math.floor(rnd() * placed[i].scored.length)];
+    const before = cost2(i, at(i), Math.hypot(cur[i].x - placed[i].ax, cur[i].y - placed[i].ay));
+    // moving card i changes its pair terms with the others (both directions), so compare just those
+    const after = cost2(i, c, L);
+    const d = after - before;
+    if (d <= 0 || rnd() < Math.exp(-d / T)) {
+      cur[i] = { b: c.b, x: c.x, y: c.y };
+      now += d;
+      if (now < bestTotal - 1e-6) { bestTotal = now; bestState = cur.map((q) => ({ ...q })); }
+    }
+  }
+  bestState.forEach((q, i) => { placed[i].b = q.b; placed[i].cx = q.x; placed[i].cy = q.y; });
+  for (let i = 0; i < placed.length; i++) {
+    placed[i].stacked = placed.some((q, j) => j !== i && overlapArea(placed[i].b, q.b) > 0);
+  }
+}
+
 /* Earliest date first; if a card ends up stacked, also try latest first and keep the better. */
+const countStacked = (pl) => pl.filter((p) => p.stacked).length;
 function bestLayout(m, evs, s, label, rbs) {
-  const count = (pl) => pl.filter((p) => p.stacked).length;
-  const fwd = layoutMonth(m, evs, s, label, rbs);
-  if (!count(fwd) || evs.length < 2) return fwd;
-  const back = layoutMonth(m, [...evs].reverse(), s, label, rbs);
-  return count(back) < count(fwd) ? back : fwd;
+  let best = null;
+  for (const strict of [true, false]) {
+    for (const list of [evs, [...evs].reverse()]) {
+      const pl = layoutMonth(m, list, s, label, rbs, strict);
+      if (!best || countStacked(pl) < countStacked(best)) best = pl;
+      if (!countStacked(best)) return best;
+      if (evs.length < 2) break;
+    }
+  }
+  return best;
+}
+/* Lower is better: cards with no spot off the month name are the worst, then
+   stacked cards, then how much the cards overlap, then leader length. */
+function layoutCost(pl, label) {
+  let k = 0;
+  for (const p of pl) {
+    if (p.noSpot) k += 1e8;
+    if (p.stacked) k += 1e6;
+    k += Math.hypot(p.cx - p.ax, p.cy - p.ay);
+    for (const q of pl) if (q !== p) k += overlapArea(p.b, q.b) / 2;
+  }
+  return k + 2 * Math.hypot(label[0] + label[2] / 2 - C, label[1] + label[3] / 2 - C);   // name nearer the centre
 }
 
 function eventsByMonth() {
@@ -419,14 +514,22 @@ function computeFull() {
   labels = [];
   fullCards = [];
   for (let m = 0; m < 12; m++) {
-    const lc = labelCands(m, rbs);
-    if (!by[m].length) { labels[m] = lc[0]; continue; }
+    const all = labelCands(m, rbs);
+    if (!by[m].length) { labels[m] = all[0]; continue; }
+    // The name hugs the inner edge of the ring and the cards take the outside.
+    // Only if the cards would then have no spot at all is the name moved outwards.
+    const rc = (b) => Math.hypot(b[0] + b[2] / 2 - C, b[1] + b[3] / 2 - C);
+    const r0 = Math.min(...all.map(rc));
     let best = null;
-    for (let i = 0; i < Math.min(lc.length, 8); i++) {
-      const pl = bestLayout(m, by[m], 1, lc[i], rbs);
-      const st = pl.filter((p) => p.stacked).length;
-      if (!best || st < best.st) best = { st, pl, lab: lc[i] };
-      if (st === 0) break;
+    for (const reach of [25, 60, 110, Infinity]) {
+      const lc = all.filter((b) => rc(b) <= r0 + reach);
+      best = null;
+      for (let i = 0; i < lc.length; i++) {
+        const pl = bestLayout(m, by[m], 1, lc[i], rbs);
+        const cost = layoutCost(pl, lc[i]);
+        if (!best || cost < best.cost) best = { cost, pl, lab: lc[i] };
+      }
+      if (best.cost < 1e8) break;
     }
     labels[m] = best.lab;
     fullCards.push(...best.pl);
@@ -606,8 +709,8 @@ function renderBase() {
   for (let m = 0; m < 12; m++) {
     const [x0, y0, w] = labels[m];
     const cx = x0 + w / 2;
-    out.push(`<text class="mon" x="${f1(cx)}" y="${f1(y0 + 27)}">${MONTHS[m]}</text>` +
-      `<text class="monpl" x="${f1(cx)}" y="${f1(y0 + 52)}">${MONTHS_PL[m]}</text>`);
+    out.push(`<text class="mon" x="${f1(cx)}" y="${f1(y0 + 32)}">${MONTHS[m]}</text>` +
+      `<text class="monpl" x="${f1(cx)}" y="${f1(y0 + 62)}">${MONTHS_PL[m]}</text>`);
   }
 
   // multi-day events: bands, with as much of "icon title" as fits
@@ -616,16 +719,20 @@ function renderBase() {
     const big = rb.a1 - rb.a0 > 180 ? 1 : 0;
     const [xs, ys] = pt(rb.a0, R), [xe, ye] = pt(rb.a1, R);
     const midA = mod((rb.a0 + rb.a1) / 2, 360);
+    // the text may run into the round caps, so its path reaches into them
+    const ext = (RV_W * 0.4) / R * 180 / Math.PI;
+    const [txs, tys] = pt(rb.a0 - ext, R), [txe, tye] = pt(rb.a1 + ext, R);
+    const tBig = rb.a1 - rb.a0 + 2 * ext > 180 ? 1 : 0;
     const textPath = midA > 90 && midA < 270
-      ? `M${f1(xe)},${f1(ye)} A${R},${R} 0 ${big} 0 ${f1(xs)},${f1(ys)}`
-      : `M${f1(xs)},${f1(ys)} A${R},${R} 0 ${big} 1 ${f1(xe)},${f1(ye)}`;
+      ? `M${f1(txe)},${f1(tye)} A${R},${R} 0 ${tBig} 0 ${f1(txs)},${f1(tys)}`
+      : `M${f1(txs)},${f1(tys)} A${R},${R} 0 ${tBig} 1 ${f1(txe)},${f1(tye)}`;
     defs.push(`<path id="rib${i}" d="${textPath}"/>`);
     const room = R * (rb.a1 - rb.a0) * Math.PI / 180 + RV_W * 0.8;
     const { icon, title } = rb.ev;
     // the longest label that fits, at the largest of three sizes
-    let label = '', size = 25;
+    let label = '', size = 37.5;
     search: for (const t of [`${icon} ${title}`, title, icon]) {
-      for (const fs of [25, 20, 16]) {
+      for (const fs of [37.5, 30, 24]) {
         if (textW(t, 800, fs) + fs * 0.08 * [...t].length <= room) { label = t; size = fs; break search; }
       }
     }
@@ -688,8 +795,8 @@ function renderOverlay() {
   }
   for (const c of cards) {
     const [x0, y0, w] = c.b;
-    const bw = w / c.s;
-    out.push(`<g class="card" data-id="${esc(c.ev.id)}" transform="translate(${f1(x0)},${f1(y0)}) scale(${c.s.toFixed(4)})">` +
+    const k = c.s * CARD_K, bw = w / k;
+    out.push(`<g class="card" data-id="${esc(c.ev.id)}" transform="translate(${f1(x0)},${f1(y0)}) scale(${k.toFixed(4)})">` +
       `<rect width="${f1(bw)}" height="${CARD_H}" rx="15" fill="#fff" stroke="${CARD_COL[SEASON_OF[c.m]]}" stroke-width="4" filter="url(#sh)"/>` +
       `<text class="emo" x="${f1(bw / 2)}" y="32">${esc(c.ev.icon)}</text>` +
       `<text class="ename" x="${f1(bw / 2)}" y="56">${esc(c.ev.title)}</text></g>`);
