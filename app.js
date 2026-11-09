@@ -161,7 +161,6 @@ function sanitize(list) {
       icon: typeof e.icon === 'string' && e.icon ? e.icon.slice(0, 8) : '⭐',
       month: e.month,
       day: e.day,
-      approx: !!e.approx,
     };
     if (kind === 'period') {
       if (!int(e.endMonth, 1, 12) || !int(e.endDay, 1, 31)) return null;
@@ -759,7 +758,7 @@ window.addEventListener('popstate', (e) => {
 function highlightedDays() {
   const hl = new Set();
   for (const e of shownEvents()) {
-    if (!e.approx) hl.add(`${e.month - 1}-${clampDay(e.month - 1, e.day)}`);
+    hl.add(`${e.month - 1}-${clampDay(e.month - 1, e.day)}`);
   }
   return hl;
 }
@@ -1302,7 +1301,6 @@ function openForm(ev, date) {
     F.endMonth.value = String(ev.endMonth);
     fillDays(F.endDay, ev.endMonth, ev.endDay);
   }
-  F.approx.checked = !!(ev && ev.approx);
   const icon = ev ? ev.icon : EMOJIS[0];
   let match = [...form.querySelectorAll('input[name="icon"]')].find((r) => r.value === icon);
   if (!match) {
@@ -1329,7 +1327,6 @@ function onSave(e) {
     icon: form.querySelector('input[name="icon"]:checked').value,
     month: +F.month.value,
     day: +F.day.value,
-    approx: isPeriod ? false : F.approx.checked,
   };
   if (isPeriod) {
     item.endMonth = +F.endMonth.value;
