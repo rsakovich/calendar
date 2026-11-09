@@ -33,10 +33,12 @@ const MON_FS = 43.7, MONPL_FS = 34.3;   // month names, Russian and Polish (also
 const ENAME_FS = 22.1;      // card title (also in style.css); the icon stays 27
 const TODAY_NUM_K = 1.5;    // today's number is this much larger than the other day numbers
 const CARD_REACH = 40;      // a card is looked for this many degrees either side of its date
-const CARD_DETOUR = 60;     // a card never sits further than this past its nearest spot (at full size;
-                            // it shrinks with the cards when zoomed in): rather overlap
-const CARD_PX = 14;         // zoomed in, cards shrink so that their name is at most this many screen px
-const CARD_AWAY = 0.6;      // a spot whose centre lies in another month counts as this many card heights further
+const CARD_DETOUR = 60;     // a card never sits further than this past its nearest spot: rather overlap
+const CARD_DETOUR_NEAR = 40; // the same when zoomed in, where cards should hug their dates more
+                            // (both at full card size: they shrink with the cards)
+const cardDetour = (s) => (s < 0.999 ? CARD_DETOUR_NEAR : CARD_DETOUR) * s;
+const CARD_PX = 20;         // zoomed in, cards shrink so that their name is at most this many screen px
+const CARD_AWAY = 1.5;      // a spot whose centre lies in another month counts as this many card heights further
 const FONT = getComputedStyle(document.documentElement).getPropertyValue('--font').trim()
   || 'Inter, system-ui, Roboto, sans-serif';
 
@@ -372,7 +374,7 @@ function layoutCards(evs, s, rbs, names, strict = true, quick = false) {
     // the nearest spot off the names; a free spot much further than that is too far:
     // then the card stays near its date and overlaps its neighbours instead
     const first = all.find(offName);
-    const maxL = (first ? first.L : 0) + CARD_DETOUR * s;
+    const maxL = (first ? first.L : 0) + cardDetour(s);
     for (const q of all) {
       const { c } = q;
       if (q.L > maxL) break;
@@ -498,7 +500,7 @@ function bestLayout(evs, s, rbs, names, quick = false) {
     for (const p of best) {
       const off = sortedCands(dateAngle(p.m, p.d), p.b[2], p.b[3], s, rbs, p.ax, p.ay)
         .filter(({ c }) => !names.some((o) => ov(c.b, o, 4 * s)));
-      p.scored = off.length ? off.filter((q) => q.L <= off[0].L + CARD_DETOUR * s) : off;
+      p.scored = off.length ? off.filter((q) => q.L <= off[0].L + cardDetour(s)) : off;
     }
     spreadOut(best, s, names);
     for (const p of best) delete p.scored;
