@@ -14,8 +14,11 @@ const R_DAY = 752;          // day-number ring: R_DAY..R_OUT
 const R_EV1 = 540;          // event zone: R_EV1..R_DAY
 const R_MON0 = 482;         // month-name ring: R_MON0..R_EV1
 const R_CORE = R_MON0;      // season pictures: 0..R_CORE
-const RV = R_DAY - 20;      // holiday band radius
-const RV_W = 34;            // holiday band width
+const RV = R_DAY - 20;      // outer band (lane 0) radius
+const RV_W = 34;            // band width
+const RV_GAP = 6;           // gap between band lanes
+const MAX_LANES = 4;        // lanes towards the centre; more bands share the last one
+const RIBBON_COL = ['#6b9be0', '#6fbf55', '#ff9f1c', '#e88a3a'];   // by the start month's season
 const TODAY_SCALE = 1.5;                   // today's cell and number vs. an ordinary day
 const TODAY_OUT = (R_DAY + R_OUT) / 2 + (R_OUT - R_DAY) * TODAY_SCALE / 2;   // its outer edge
 const FULL_BOX = { x: -45, y: -45, w: 1690, h: 1690 };
@@ -204,21 +207,49 @@ function importFromHash() {
   saveItems();
 }
 
-/* ---------------- holiday bands ---------------- */
+/* ---------------- multi-day events: bands ---------------- */
 
+function monthsCovered(a0, a1) {
+  const ms = [];
+  for (let m = 0; m < 12; m++) {
+    const s0 = m * 30 - 15;
+    if (angIn(s0 + 0.01, a0, a1) || angIn(a0, s0, s0 + 30)) ms.push(m);
+  }
+  return ms;
+}
+
+/* Each multi-day event is a band along the event zone. The first band in a
+   month lies by the day ring; another band in the same month gets its own
+   lane, closer to the centre. Earlier (then longer) events go outermost. */
 function ribbons() {
-  return shownThisYear().filter((e) => e.kind === 'period').map((e) => {
+  const list = shownThisYear().filter((e) => e.kind === 'period').map((e) => {
     const m0 = e.month - 1, m1 = e.endMonth - 1;
     const d0 = clampDay(m0, e.day), d1 = clampDay(m1, e.endDay);
-    const a0 = cellStart(m0, d0) + 1.5;
-    let a1 = cellStart(m1, d1) + 30 / days[m1] - 1.5;
-    while (a1 <= a0) a1 += 360;
-    return { ev: e, a0, a1 };
+    // from the start of the first day's cell to the end of the last day's cell
+    const c0 = cellStart(m0, d0);
+    let c1 = cellStart(m1, d1) + 30 / days[m1];
+    while (c1 <= c0) c1 += 360;
+    return { ev: e, a0: c0, a1: c1 };
   });
+  list.sort((p, q) => (p.ev.month - q.ev.month) || (p.ev.day - q.ev.day) || ((q.a1 - q.a0) - (p.a1 - p.a0)));
+  const used = Array.from({ length: 12 }, () => new Set());
+  for (const rb of list) {
+    const ms = monthsCovered(rb.a0, rb.a1);
+    let lane = 0;
+    while (lane < MAX_LANES - 1 && ms.some((m) => used[m].has(lane))) lane++;
+    for (const m of ms) used[m].add(lane);
+    rb.lane = lane;
+    rb.r = RV - lane * (RV_W + RV_GAP);
+    // pull the ends in by the round cap, so the band covers exactly its days
+    const cap = (RV_W / 2) / rb.r * 180 / Math.PI;
+    if (rb.a1 - rb.a0 > 2 * cap) { rb.a0 += cap; rb.a1 -= cap; }
+    else { const mid = (rb.a0 + rb.a1) / 2; rb.a0 = mid - 0.01; rb.a1 = mid + 0.01; }
+  }
+  return list;
 }
 function inRibbon(ang, r, pad, rbs) {
   for (const rb of rbs) {
-    if (Math.abs(r - RV) < RV_W / 2 + pad && angIn(ang, rb.a0 - 3, rb.a1 + 3)) return true;
+    if (Math.abs(r - rb.r) < RV_W / 2 + pad && angIn(ang, rb.a0 - 3, rb.a1 + 3)) return true;
   }
   return false;
 }
@@ -242,7 +273,7 @@ function boxOk(m, b, r0, r1, n, rbs) {
   const rmin = Math.hypot(Math.max(x0 - C, 0, C - x0 - w), Math.max(y0 - C, 0, C - y0 - h));
   if (rmin <= r0) return false;
   // holiday band: only sample the edges when the box reaches its radius
-  if (rbs.length && rmax > RV - RV_W / 2 - 6 && rmin < RV + RV_W / 2 + 6) {
+  if (rbs.some((rb) => rmax > rb.r - RV_W / 2 - 6 && rmin < rb.r + RV_W / 2 + 6)) {
     for (let i = 0; i <= n; i++) {
       const fx = x0 + w * i / n, fy = y0 + h * i / n;
       for (const [px, py] of [[fx, y0], [fx, y0 + h], [x0, fy], [x0 + w, fy]]) {
@@ -285,7 +316,7 @@ const cardBaseW = (ev) => Math.max(textW(ev.title, 800, 17), 30) + 22;
 let candCache = new Map();
 let candSig = '';
 function syncCandCache(rbs) {
-  const sig = rbs.map((r) => `${r.a0.toFixed(2)}:${r.a1.toFixed(2)}`).join(',') + `|${days[1]}`;
+  const sig = rbs.map((r) => `${r.a0.toFixed(2)}:${r.a1.toFixed(2)}:${r.r}`).join(',') + `|${days[1]}`;
   if (sig !== candSig || candCache.size > 3000) { candCache = new Map(); candSig = sig; }
 }
 function cardCands(m, w, h, s, rbs) {
@@ -556,19 +587,30 @@ function renderBase() {
       `<text class="monpl" x="${f1(cx)}" y="${f1(y0 + 52)}">${MONTHS_PL[m]}</text>`);
   }
 
-  // holiday bands
+  // multi-day events: bands, with as much of "icon title" as fits
   rbs.forEach((rb, i) => {
+    const R = rb.r;
     const big = rb.a1 - rb.a0 > 180 ? 1 : 0;
-    const [xs, ys] = pt(rb.a0, RV), [xe, ye] = pt(rb.a1, RV);
+    const [xs, ys] = pt(rb.a0, R), [xe, ye] = pt(rb.a1, R);
     const midA = mod((rb.a0 + rb.a1) / 2, 360);
     const textPath = midA > 90 && midA < 270
-      ? `M${f1(xe)},${f1(ye)} A${RV},${RV} 0 ${big} 0 ${f1(xs)},${f1(ys)}`
-      : `M${f1(xs)},${f1(ys)} A${RV},${RV} 0 ${big} 1 ${f1(xe)},${f1(ye)}`;
+      ? `M${f1(xe)},${f1(ye)} A${R},${R} 0 ${big} 0 ${f1(xs)},${f1(ys)}`
+      : `M${f1(xs)},${f1(ys)} A${R},${R} 0 ${big} 1 ${f1(xe)},${f1(ye)}`;
     defs.push(`<path id="rib${i}" d="${textPath}"/>`);
-    const label = `${rb.ev.icon} ${rb.ev.title} ${rb.ev.icon}`;
+    const room = R * (rb.a1 - rb.a0) * Math.PI / 180 + RV_W * 0.8;
+    const { icon, title } = rb.ev;
+    // the longest label that fits, at the largest of three sizes
+    let label = '', size = 25;
+    search: for (const t of [`${icon} ${title}`, title, icon]) {
+      for (const fs of [25, 20, 16]) {
+        if (textW(t, 800, fs) + fs * 0.08 * [...t].length <= room) { label = t; size = fs; break search; }
+      }
+    }
+    const col = RIBBON_COL[SEASON_OF[rb.ev.month - 1]];
     out.push(`<g data-period="${esc(rb.ev.id)}">` +
-      `<path d="M${f1(xs)},${f1(ys)} A${RV},${RV} 0 ${big} 1 ${f1(xe)},${f1(ye)}" stroke="#ff9f1c" stroke-width="${RV_W}" fill="none" stroke-linecap="round"/>` +
-      `<text class="vac" dy="9"><textPath href="#rib${i}" startOffset="50%" text-anchor="middle">${esc(label)}</textPath></text></g>`);
+      `<path d="M${f1(xs)},${f1(ys)} A${R},${R} 0 ${big} 1 ${f1(xe)},${f1(ye)}" stroke="${col}" stroke-width="${RV_W}" fill="none" stroke-linecap="round"/>` +
+      (label ? `<text class="vac" dy="${f1(size * 0.36)}" style="font-size:${size}px;letter-spacing:${f1(size * 0.08)}px"><textPath href="#rib${i}" startOffset="50%" text-anchor="middle">${esc(label)}</textPath></text>` : '') +
+      `</g>`);
   });
 
   // day cells and numbers
@@ -799,7 +841,7 @@ for (const dlg of [menu, formDlg]) {
 
 function describe(ev) {
   const start = dateText(ev.month - 1, ev.day);
-  if (ev.kind === 'period') return `${start} — ${dateText(ev.endMonth - 1, ev.endDay)}`;
+  if (ev.kind === 'period') return `${start} — ${dateText(ev.endMonth - 1, ev.endDay)}` + (ev.year ? `, только ${ev.year}` : '');
   return (ev.approx ? 'примерно ' : '') + start + (ev.year ? `, только ${ev.year}` : ', каждый год');
 }
 
@@ -862,15 +904,29 @@ function setupForm() {
   $('iconGrid').innerHTML = EMOJIS.map((e, i) =>
     `<label><input type="radio" name="icon" value="${e}"${i === 0 ? ' checked' : ''}><span>${e}</span></label>`).join('');
   $('formCancel').addEventListener('click', () => formDlg.close());
+  F.multi.addEventListener('change', () => {
+    setMultiMode(F.multi.checked);
+    if (F.multi.checked) {   // start the end date on the next day
+      const m = +F.month.value, d = +F.day.value;
+      const nm = d < days[m - 1] ? m : (m % 12) + 1, nd = d < days[m - 1] ? d + 1 : 1;
+      F.endMonth.value = String(nm);
+      fillDays(F.endDay, nm, nd);
+    }
+  });
   form.addEventListener('submit', onSave);
+}
+
+function setMultiMode(on) {
+  form.classList.toggle('is-period', on);
+  $('startLabel').textContent = on ? 'Начало' : 'Дата';
 }
 
 function openForm(ev, date) {
   editing = ev || null;
   const isPeriod = !!ev && ev.kind === 'period';
-  form.classList.toggle('is-period', isPeriod);
-  $('formTitle').textContent = !ev ? 'Новое событие' : isPeriod ? 'Каникулы' : 'Изменить событие';
-  $('startLabel').textContent = isPeriod ? 'Начало' : 'Дата';
+  F.multi.checked = isPeriod;
+  setMultiMode(isPeriod);
+  $('formTitle').textContent = ev ? 'Изменить событие' : 'Новое событие';
 
   const month = ev ? ev.month : date.m + 1;
   const day = ev ? ev.day : date.d;
@@ -899,22 +955,21 @@ function onSave(e) {
   e.preventDefault();
   const title = F.title.value.trim().slice(0, 14);
   if (!title) { F.title.focus(); return; }
-  const isPeriod = !!editing && editing.kind === 'period';
+  const isPeriod = F.multi.checked;
   const item = {
     id: editing ? editing.id : uuid(),
     kind: isPeriod ? 'period' : 'event',
     title,
-    icon: isPeriod ? editing.icon : form.querySelector('input[name="icon"]:checked').value,
+    icon: form.querySelector('input[name="icon"]:checked').value,
     month: +F.month.value,
     day: +F.day.value,
-    approx: isPeriod ? editing.approx : F.approx.checked,
+    approx: isPeriod ? false : F.approx.checked,
   };
   if (isPeriod) {
     item.endMonth = +F.endMonth.value;
     item.endDay = +F.endDay.value;
-  } else if (!F.yearly.checked) {
-    item.year = editing && editing.year ? editing.year : year;
   }
+  if (!F.yearly.checked) item.year = editing && editing.year ? editing.year : year;
   if (editing) items = items.map((x) => (x.id === editing.id ? item : x));
   else items.push(item);
   if (!isPeriod) raiseIds([item.id]);
