@@ -33,9 +33,10 @@ const MON_FS = 43.7, MONPL_FS = 34.3;   // month names, Russian and Polish (also
 const ENAME_FS = 22.1;      // card title (also in style.css); the icon stays 27
 const TODAY_NUM_K = 1.5;    // today's number is this much larger than the other day numbers
 const CARD_REACH = 40;      // a card is looked for this many degrees either side of its date
-const CARD_DETOUR = 60;     // a card never sits further than this past its nearest spot (about 5 days,
-                            // at any zoom): rather overlap
-const CARD_PX = 16.9;       // cards stop growing once their name is this many screen px (30% over the old 13)
+const CARD_DETOUR = 60;     // a card never sits further than this past its nearest spot (at full size;
+                            // it shrinks with the cards when zoomed in): rather overlap
+const CARD_PX = 14;         // zoomed in, cards shrink so that their name is at most this many screen px
+const CARD_AWAY = 0.6;      // a spot whose centre lies in another month counts as this many card heights further
 const FONT = getComputedStyle(document.documentElement).getPropertyValue('--font').trim()
   || 'Inter, system-ui, Roboto, sans-serif';
 
@@ -327,18 +328,21 @@ function syncCandCache(rbs) {
   const sig = rbs.map((r) => `${r.a0.toFixed(2)}:${r.a1.toFixed(2)}:${r.r}`).join(',') + `|${days[1]}`;
   if (sig !== candSig || candCache.size > 3000) { candCache = new Map(); candSig = sig; }
 }
-/* Spots around angle a0, nearest to the anchor (ax, ay) first. */
+/* Spots around angle a0, nearest to the anchor (ax, ay) first. L is the distance,
+   plus a penalty for a spot whose centre is in another month than the date. */
 function sortedCands(a0, w, h, s, rbs, ax, ay) {
   const key = `${a0.toFixed(2)}|${w.toFixed(1)}|${h.toFixed(1)}|${s.toFixed(3)}`;
   let out = candCache.get(key);
   if (out) return out;
   out = [];
+  const mStart = Math.floor((a0 + 15) / 30) * 30 - 15;
+  const away = (a) => (a < mStart || a > mStart + 30 ? CARD_AWAY * h : 0);
   const aStep = Math.max(0.5, s), rStep = Math.max(3, 8 * s);
   for (let a = a0 - CARD_REACH; a <= a0 + CARD_REACH + 1e-6; a += aStep) {
     for (let r = R_MON0 + 4 + h / 2; r < R_DAY - 4 - h / 2 + 1e-6; r += rStep) {
       const [x, y] = pt(a, r);
       const b = [x - w / 2, y - h / 2, w, h];
-      if (ringOk(b, rbs)) out.push({ c: { x, y, b }, L: Math.hypot(x - ax, y - ay) });
+      if (ringOk(b, rbs)) out.push({ c: { x, y, b }, L: Math.hypot(x - ax, y - ay) + away(a) });
     }
   }
   out.sort((p, q) => p.L - q.L);
@@ -368,7 +372,7 @@ function layoutCards(evs, s, rbs, names, strict = true, quick = false) {
     // the nearest spot off the names; a free spot much further than that is too far:
     // then the card stays near its date and overlaps its neighbours instead
     const first = all.find(offName);
-    const maxL = (first ? first.L : 0) + CARD_DETOUR;
+    const maxL = (first ? first.L : 0) + CARD_DETOUR * s;
     for (const q of all) {
       const { c } = q;
       if (q.L > maxL) break;
@@ -494,7 +498,7 @@ function bestLayout(evs, s, rbs, names, quick = false) {
     for (const p of best) {
       const off = sortedCands(dateAngle(p.m, p.d), p.b[2], p.b[3], s, rbs, p.ax, p.ay)
         .filter(({ c }) => !names.some((o) => ov(c.b, o, 4 * s)));
-      p.scored = off.length ? off.filter((q) => q.L <= off[0].L + CARD_DETOUR) : off;
+      p.scored = off.length ? off.filter((q) => q.L <= off[0].L + CARD_DETOUR * s) : off;
     }
     spreadOut(best, s, names);
     for (const p of best) delete p.scored;
@@ -650,7 +654,7 @@ function setVB(b) {
   svg.classList.toggle('far', b.w >= NEAR_W);   // year/season scale: hide day numbers
 }
 const pxPerUnit = () => (svg.clientWidth || 360) / vb.w;
-const cardScale = () => Math.min(1, CARD_PX / (ENAME_FS * pxPerUnit()));
+const cardScale = () => Math.min(1, CARD_PX / (ENAME_FS * CARD_K * pxPerUnit()));
 
 function viewMonths(v) {
   if (v.t === 'free') {          // every month with a part inside the box
