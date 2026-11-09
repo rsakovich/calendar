@@ -12,7 +12,7 @@ const C = 800;
 const R_OUT = 795;          // outer edge
 const R_DAY = 752;          // day-number ring: R_DAY..R_OUT
 const R_EV1 = 540;          // event zone: R_EV1..R_DAY
-const R_MON0 = 482;         // month-name ring: R_MON0..R_EV1
+const R_MON0 = 386;         // month-name ring: R_MON0..R_EV1 (the season core is 20% smaller than before)
 const R_CORE = R_MON0;      // season pictures: 0..R_CORE
 const RV = R_DAY - 29;      // outer band (lane 0) radius
 const RV_W = 51;            // band width
@@ -272,7 +272,7 @@ function boxOk(m, b, r0, r1, n, rbs) {
     if (r >= r1) return false;
     if (r > rmax) rmax = r;
     const rel = mod(Math.atan2(dx, -dy) * 57.29577951308232 - start, 360);
-    if (!(rel > 1.5 && rel < 28.5)) return false;
+    if (!(rel > 1 && rel < 29)) return false;
   }
   const rmin = Math.hypot(Math.max(x0 - C, 0, C - x0 - w), Math.max(y0 - C, 0, C - y0 - h));
   if (rmin <= r0) return false;
@@ -330,10 +330,10 @@ function cardCands(m, w, h, s, rbs) {
   out = [];
   const aStep = Math.max(0.5, s), rStep = Math.max(3, 8 * s);
   for (let a = m * 30 - 14; a <= m * 30 + 14 + 1e-6; a += aStep) {
-    for (let r = R_MON0 + 8 + h / 2; r < R_DAY - 8 - h / 2 + 1e-6; r += rStep) {
+    for (let r = R_MON0 + 4 + h / 2; r < R_DAY - 4 - h / 2 + 1e-6; r += rStep) {
       const [x, y] = pt(a, r);
       const b = [x - w / 2, y - h / 2, w, h];
-      if (boxOk(m, b, R_MON0 + 8, R_DAY - 8, 20, rbs)) out.push({ x, y, b });
+      if (boxOk(m, b, R_MON0 + 4, R_DAY - 4, 20, rbs)) out.push({ x, y, b });
     }
   }
   candCache.set(key, out);
@@ -355,9 +355,9 @@ function sortedCands(m, d, w, h, s, rbs, ax, ay) {
 
 /* Greedy placement, earliest date first: each card takes the free spot with the
    shortest leader line. Cards with no free spot are stacked under the others. */
-function layoutMonth(m, evs, s, label, rbs) {
+function layoutMonth(m, evs, s, label, rbs, strict = true) {
   const placed = [];
-  const gap = 8 * s;
+  const gap = 4 * s;
   for (const ev of evs) {
     const w = cardBaseW(ev) * s * CARD_K, h = CARD_H * s * CARD_K;
     const d = clampDay(m, ev.day);
@@ -369,8 +369,9 @@ function layoutMonth(m, evs, s, label, rbs) {
     for (const { c } of scored) {
       if (free.some((p) => ov(c.b, p.b, gap))) continue;
       if (label && segHits(ax, ay, c.x, c.y, label, 3 * s)) continue;
-      if (free.some((p) => segHits(ax, ay, c.x, c.y, p.b, 4 * s))) continue;
-      if (free.some((p) => segHits(p.ax, p.ay, p.cx, p.cy, c.b, 4 * s))) continue;
+      // leader lines normally keep clear of other cards; when space is short they may pass under them
+      if (strict && free.some((p) => segHits(ax, ay, c.x, c.y, p.b, 4 * s))) continue;
+      if (strict && free.some((p) => segHits(p.ax, p.ay, p.cx, p.cy, c.b, 4 * s))) continue;
       best = c;
       break;
     }
@@ -378,44 +379,123 @@ function layoutMonth(m, evs, s, label, rbs) {
     if (!best) {
       stacked = true;
       let bestScore = Infinity;
-      for (const { c, L } of scored) {
-        let o = 0;
-        for (const p of placed) o += overlapArea(c.b, p.b);
-        const score = o / (s * s) + L / s;
-        if (score < bestScore) { bestScore = score; best = c; }
+      // overlap is allowed, but no card may be mostly hidden: at most 45% of the smaller one
+      for (const limit of [0.45, 0.7, 1.01]) {
+        for (const { c, L } of scored) {
+          let o = 0, worst = 0;
+          for (const p of placed) {
+            const a = overlapArea(c.b, p.b);
+            o += a;
+            worst = Math.max(worst, a / Math.min(c.b[2] * c.b[3], p.b[2] * p.b[3]));
+          }
+          if (worst > limit) continue;
+          const score = o / (s * s) + L / s;
+          if (score < bestScore) { bestScore = score; best = c; }
+        }
+        if (best) break;
       }
       if (!best) {
         const [x, y] = pt(dateAngle(m, d), (R_EV1 + R_DAY) / 2);
         best = { x, y, b: [x - w / 2, y - h / 2, w, h] };
       }
     }
-    placed.push({ ev, m, d, b: best.b, cx: best.x, cy: best.y, ax, ay, stacked, s });
+    placed.push({ ev, m, d, b: best.b, cx: best.x, cy: best.y, ax, ay, stacked, s, scored, noSpot: !scored.length });
   }
+  if (placed.some((p) => p.stacked)) spreadOut(placed, s);
+  for (const p of placed) delete p.scored;
   return placed;
 }
 
-/* Earliest date first; if a card ends up stacked, also try latest first and keep the better. */
-const SHRINK = [1, 0.88, 0.77, 0.67, 0.58];
-const countStacked = (pl) => pl.filter((p) => p.stacked).length;
-function layoutAt(m, evs, s, label, rbs) {
-  const fwd = layoutMonth(m, evs, s, label, rbs);
-  if (!countStacked(fwd) || evs.length < 2) return fwd;
-  const back = layoutMonth(m, [...evs].reverse(), s, label, rbs);
-  return countStacked(back) < countStacked(fwd) ? back : fwd;
+/* Not everything fits: let the cards overlap as little as possible. Each card in
+   turn moves to the spot (off the month name) that gives the least overlap with
+   the others, no card ever being mostly hidden, then keeps a short leader line. */
+function spreadOut(placed, s) {
+  const area = (b) => b[2] * b[3];
+  const cost = (i, c, L) => {
+    let o = 0, worst = 0, cross = 0;
+    for (let j = 0; j < placed.length; j++) {
+      if (j === i) continue;
+      const q = placed[j];
+      const a = overlapArea(c.b, q.b);
+      o += a;
+      worst = Math.max(worst, a / Math.min(area(c.b), area(q.b)));
+      if (segHits(placed[i].ax, placed[i].ay, c.x, c.y, q.b, 4 * s)) cross++;
+      if (segHits(q.ax, q.ay, q.cx, q.cy, c.b, 4 * s)) cross++;
+    }
+    return o / (s * s) + 0.4 * L / s + 250 * cross + (worst > 0.45 ? 2e5 * (worst - 0.45) : 0);
+  };
+  // simulated annealing over the candidate spots (fixed seed: the layout is repeatable)
+  let seed = 12345;
+  const rnd = () => (seed = (seed * 1664525 + 1013904223) % 4294967296) / 4294967296;
+  const cur = placed.map((p) => ({ b: p.b, x: p.cx, y: p.cy }));
+  const at = (i) => ({ b: cur[i].b, x: cur[i].x, y: cur[i].y });
+  const total = () => placed.reduce((a, p, i) => {
+    const q = at(i);
+    return a + cost2(i, q, Math.hypot(q.x - p.ax, q.y - p.ay));
+  }, 0);
+  const cost2 = (i, c, L) => {
+    // like cost(), but against the current (not yet applied) positions of the others
+    let o = 0, worst = 0, cross = 0;
+    for (let j = 0; j < placed.length; j++) {
+      if (j === i) continue;
+      const q = cur[j];
+      const a = overlapArea(c.b, q.b);
+      o += a;
+      worst = Math.max(worst, a / Math.min(area(c.b), area(q.b)));
+      if (segHits(placed[i].ax, placed[i].ay, c.x, c.y, q.b, 4 * s)) cross++;
+      if (segHits(placed[j].ax, placed[j].ay, q.x, q.y, c.b, 4 * s)) cross++;
+    }
+    return o / (s * s) + 0.4 * L / s + 250 * cross + (worst > 0.45 ? 2e5 * (worst - 0.45) : 0);
+  };
+  const movable = placed.map((p, i) => i).filter((i) => placed[i].scored.length);
+  let now = total(), bestTotal = now, bestState = cur.map((c) => ({ ...c }));
+  const steps = 600 * Math.max(1, movable.length);
+  for (let k = 0; k < steps && movable.length; k++) {
+    const T = 3000 * Math.pow(0.003, k / steps);
+    const i = movable[Math.floor(rnd() * movable.length)];
+    const { c, L } = placed[i].scored[Math.floor(rnd() * placed[i].scored.length)];
+    const before = cost2(i, at(i), Math.hypot(cur[i].x - placed[i].ax, cur[i].y - placed[i].ay));
+    // moving card i changes its pair terms with the others (both directions), so compare just those
+    const after = cost2(i, c, L);
+    const d = after - before;
+    if (d <= 0 || rnd() < Math.exp(-d / T)) {
+      cur[i] = { b: c.b, x: c.x, y: c.y };
+      now += d;
+      if (now < bestTotal - 1e-6) { bestTotal = now; bestState = cur.map((q) => ({ ...q })); }
+    }
+  }
+  bestState.forEach((q, i) => { placed[i].b = q.b; placed[i].cx = q.x; placed[i].cy = q.y; });
+  for (let i = 0; i < placed.length; i++) {
+    placed[i].stacked = placed.some((q, j) => j !== i && overlapArea(placed[i].b, q.b) > 0);
+  }
 }
-/* If the month's cards do not all fit at this size, make them (all of the
-   month alike) a little smaller until they do; keep the best attempt. */
+
+/* Earliest date first; if a card ends up stacked, also try latest first and keep the better. */
+const countStacked = (pl) => pl.filter((p) => p.stacked).length;
 function bestLayout(m, evs, s, label, rbs) {
   let best = null;
-  for (const f of SHRINK) {
-    const pl = layoutAt(m, evs, s * f, label, rbs);
-    if (!best || countStacked(pl) < countStacked(best)) best = pl;
-    if (!countStacked(pl)) break;
+  for (const strict of [true, false]) {
+    for (const list of [evs, [...evs].reverse()]) {
+      const pl = layoutMonth(m, list, s, label, rbs, strict);
+      if (!best || countStacked(pl) < countStacked(best)) best = pl;
+      if (!countStacked(best)) return best;
+      if (evs.length < 2) break;
+    }
   }
   return best;
 }
-const layoutCost = (pl, s) => countStacked(pl) * 1e6 - (pl.length ? pl[0].s / s : 1) * 1e4
-  + pl.reduce((a, p) => a + Math.hypot(p.cx - p.ax, p.cy - p.ay), 0);
+/* Lower is better: cards with no spot off the month name are the worst, then
+   stacked cards, then how much the cards overlap, then leader length. */
+function layoutCost(pl, label) {
+  let k = 0;
+  for (const p of pl) {
+    if (p.noSpot) k += 1e8;
+    if (p.stacked) k += 1e6;
+    k += Math.hypot(p.cx - p.ax, p.cy - p.ay);
+    for (const q of pl) if (q !== p) k += overlapArea(p.b, q.b) / 2;
+  }
+  return k + 2 * Math.hypot(label[0] + label[2] / 2 - C, label[1] + label[3] / 2 - C);   // name nearer the centre
+}
 
 function eventsByMonth() {
   const by = Array.from({ length: 12 }, () => []);
@@ -434,15 +514,16 @@ function computeFull() {
   labels = [];
   fullCards = [];
   for (let m = 0; m < 12; m++) {
-    const lc = labelCands(m, rbs);
-    if (!by[m].length) { labels[m] = lc[0]; continue; }
+    const all = labelCands(m, rbs);
+    if (!by[m].length) { labels[m] = all[0]; continue; }
+    const lc = all;
     let best = null;
-    const step = Math.max(1, Math.floor(lc.length / 24));
+    const step = Math.max(1, Math.floor(lc.length / 60));
     for (let i = 0; i < lc.length; i += step) {
       const pl = bestLayout(m, by[m], 1, lc[i], rbs);
-      const cost = layoutCost(pl, 1);
+      const cost = layoutCost(pl, lc[i]);
       if (!best || cost < best.cost) best = { cost, pl, lab: lc[i] };
-      if (best.cost < 0 && i >= 6 * step) break;   // everything fits at full size: enough looking
+      if (best.cost < 1e5 && i >= 6 * step) break;   // everything fits: enough looking
     }
     labels[m] = best.lab;
     fullCards.push(...best.pl);
