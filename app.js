@@ -37,11 +37,13 @@ const CARD_REACH = 40;      // a card is looked for this many degrees either sid
 const CARD_DETOUR = 60;     // a card never sits further than this past its nearest spot: rather overlap
 const CARD_DETOUR_NEAR = 40; // the same when zoomed in, where cards should hug their dates more
                             // (both at full card size: they shrink with the cards)
-const NAME_OUT = 15, NAME_OUT_COST = 4;   // a month name steps out from the centre at most this far, each unit costing this much leader
+const NAME_OUT = 20, NAME_OUT_COST = 4;   // a month name steps out from the centre at most this far, each unit costing this much leader
 const NAME_DETOUR = 120;    // past this much further than the nearest spot, a card rather covers a month name
 const cardDetour = (s) => (s < 0.999 ? CARD_DETOUR_NEAR : CARD_DETOUR) * s;
-const CARD_AWAY = 1.5;      // a spot whose centre lies in another month counts as this many card heights further
-const CARD_AWAY_FULL = 0.3; // the same on the whole circle, where a card is wider than a few days and room is short
+const CARD_AWAY = 10;       // a spot whose centre lies in another month counts as this many card heights further:
+                            // a card stays in its own month unless there is no room there at all...
+const CARD_SPILL = 4, CARD_SPILL_COST = 0.5;   // ...though its centre may cross the line by this many degrees,
+                                                // counting this many card heights further
 const FONT = getComputedStyle(document.documentElement).getPropertyValue('--font').trim()
   || 'Inter, system-ui, Roboto, sans-serif';
 
@@ -299,6 +301,14 @@ function boxOk(m, b, r0, r1, n, rbs, spill = 0) {
 function monthLabelSize(m) {
   return [Math.max(textW(MONTHS[m], 800, MON_FS), textW(MONTHS_PL[m], 600, MONPL_FS)) + 12, MON_H];
 }
+/* The three lines of a month name in its box b (Russian, Polish, number), each as wide as
+   its own text: the box's empty corners may reach over the centre circle and month lines. */
+function labelLines(m, b) {
+  const cx = b[0] + b[2] / 2, y0 = b[1];
+  const line = (t, wt, fs, top, h) => { const w = textW(t, wt, fs) + 8; return [cx - w / 2, y0 + top, w, h]; };
+  return [line(MONTHS[m], 800, MON_FS, 6, 48), line(MONTHS_PL[m], 600, MONPL_FS, 52, 40),
+    line(String(m + 1), 700, MONPL_FS, 90, 30)];
+}
 function labelCands(m, rbs) {
   const key = `L|${m}`;
   const cached = candCache.get(key);
@@ -309,7 +319,7 @@ function labelCands(m, rbs) {
     for (const da of [0, -3, 3, -6, 6, -9, 9]) {
       const [x, y] = pt(m * 30 + da, r);
       const b = [x - w / 2, y - h / 2, w, h];
-      if (boxOk(m, b, R_MON0 + 6, R_DAY - 6, 10, rbs)) out.push(b);
+      if (labelLines(m, b).every((l) => boxOk(m, l, R_MON0 + 6, R_DAY - 6, 10, rbs))) out.push(b);
     }
   }
   if (!out.length) {
@@ -346,8 +356,10 @@ function sortedCands(a0, w, h, s, rbs, ax, ay) {
   if (out) return out;
   out = [];
   const mStart = Math.floor((a0 + 15) / 30) * 30 - 15;
-  const k = s < 0.999 ? CARD_AWAY : CARD_AWAY_FULL;
-  const away = (a) => (a < mStart || a > mStart + 30 ? k * h : 0);
+  const away = (a) => {
+    const past = Math.max(mStart - a, a - mStart - 30, 0);   // degrees beyond the month's sides
+    return past === 0 ? 0 : past <= CARD_SPILL ? CARD_SPILL_COST * h : CARD_AWAY * h;
+  };
   const aStep = Math.max(0.5, s), rStep = Math.max(3, 8 * s);
   for (let a = a0 - CARD_REACH; a <= a0 + CARD_REACH + 1e-6; a += aStep) {
     for (let r = R_MON0 + 4 + h / 2; r < R_DAY - 4 - h / 2 + 1e-6; r += rStep) {
@@ -465,7 +477,7 @@ function spreadOut(placed, s, obst = []) {
     }
     for (const b of nobst[i]) {
       const a = overlapArea(c.b, b);
-      o += a;
+      o += NAME_SPREAD_K * a;   // covering a month name is much worse than covering a card
       worst = Math.max(worst, a / Math.min(area(c.b), area(b)));
     }
     return o / (s * s) + 1.0 * L / s + 250 * cross + (worst > 0.45 ? 2e5 * (worst - 0.45) : 0);
@@ -537,6 +549,8 @@ let fullCards = [];      // card layout at full size
    length, a card partly covering another counting as STACK_COST longer: a card near its
    date, overlapping a neighbour, beats one far away. */
 const STACK_COST = 150;
+const HIDDEN_COST = 500;          // times the share of the smaller card hidden by another
+const NAME_SPREAD_K = 10;         // in spreadOut: a unit² of a month name under a card counts as this many of a card
 const NAME_COVER_COST = 1000;   // per unit² of a month name under a card
 function layoutCost(pl) {
   let k = 0;
@@ -544,6 +558,13 @@ function layoutCost(pl) {
     // a card on a month name: the worst, by how much of the name it covers
     const onName = p.noSpot ? labels.reduce((a, o) => a + overlapArea(p.b, o), 0) : 0;
     k += NAME_COVER_COST * onName + (p.stacked ? STACK_COST : 0) + Math.hypot(p.cx - p.ax, p.cy - p.ay);
+  }
+  // and the more of a card is hidden under another, the worse
+  for (let i = 0; i < pl.length; i++) {
+    for (let j = i + 1; j < pl.length; j++) {
+      const a = overlapArea(pl[i].b, pl[j].b);
+      if (a > 0) k += HIDDEN_COST * a / Math.min(pl[i].b[2] * pl[i].b[3], pl[j].b[2] * pl[j].b[3]);
+    }
   }
   return k;
 }
