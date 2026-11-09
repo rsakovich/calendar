@@ -30,6 +30,7 @@ const FULL_BOX = { x: -45, y: -45, w: 1690, h: 1690 };
 const CARD_H = 72;          // icon on top, name (ENAME_FS) under it
 const CARD_K = 1.5;         // cards are drawn this much larger than their base size
 const MON_FS = 43.7, MONPL_FS = 34.3;   // month names, Russian and Polish (also in style.css)
+const MON_H = 126;                      // month name box: Russian, Polish, then the month's number
 const ENAME_FS = 22.1;      // card title (also in style.css); the icon stays 27
 const TODAY_NUM_K = 1.5;    // today's number is this much larger than the other day numbers
 const CARD_REACH = 40;      // a card is looked for this many degrees either side of its date
@@ -38,6 +39,7 @@ const CARD_DETOUR_NEAR = 40; // the same when zoomed in, where cards should hug 
                             // (both at full card size: they shrink with the cards)
 const cardDetour = (s) => (s < 0.999 ? CARD_DETOUR_NEAR : CARD_DETOUR) * s;
 const CARD_AWAY = 1.5;      // a spot whose centre lies in another month counts as this many card heights further
+const CARD_AWAY_FULL = 0.3; // the same on the whole circle, where a card is wider than a few days and room is short
 const FONT = getComputedStyle(document.documentElement).getPropertyValue('--font').trim()
   || 'Inter, system-ui, Roboto, sans-serif';
 
@@ -293,7 +295,7 @@ function boxOk(m, b, r0, r1, n, rbs, spill = 0) {
 }
 
 function monthLabelSize(m) {
-  return [Math.max(textW(MONTHS[m], 800, MON_FS), textW(MONTHS_PL[m], 600, MONPL_FS)) + 12, 91];
+  return [Math.max(textW(MONTHS[m], 800, MON_FS), textW(MONTHS_PL[m], 600, MONPL_FS)) + 12, MON_H];
 }
 function labelCands(m, rbs) {
   const key = `L|${m}`;
@@ -337,7 +339,8 @@ function sortedCands(a0, w, h, s, rbs, ax, ay) {
   if (out) return out;
   out = [];
   const mStart = Math.floor((a0 + 15) / 30) * 30 - 15;
-  const away = (a) => (a < mStart || a > mStart + 30 ? CARD_AWAY * h : 0);
+  const k = s < 0.999 ? CARD_AWAY : CARD_AWAY_FULL;
+  const away = (a) => (a < mStart || a > mStart + 30 ? k * h : 0);
   const aStep = Math.max(0.5, s), rStep = Math.max(3, 8 * s);
   for (let a = a0 - CARD_REACH; a <= a0 + CARD_REACH + 1e-6; a += aStep) {
     for (let r = R_MON0 + 4 + h / 2; r < R_DAY - 4 - h / 2 + 1e-6; r += rStep) {
@@ -819,12 +822,13 @@ function renderBase() {
   }
   out.push(`<circle cx="${C}" cy="${C}" r="${R_CORE}" fill="none" stroke="#fff" stroke-width="7"/>`);
 
-  // month names: Russian, Polish under it
+  // month names: Russian, Polish under it, then the month's number
   for (let m = 0; m < 12; m++) {
     const [x0, y0, w] = labels[m];
     const cx = x0 + w / 2;
     out.push(`<text class="mon" x="${f1(cx)}" y="${f1(y0 + 42)}">${MONTHS[m]}</text>` +
-      `<text class="monpl" x="${f1(cx)}" y="${f1(y0 + 81)}">${MONTHS_PL[m]}</text>`);
+      `<text class="monpl" x="${f1(cx)}" y="${f1(y0 + 81)}">${MONTHS_PL[m]}</text>` +
+      `<text class="monnum" x="${f1(cx)}" y="${f1(y0 + 117)}">${m + 1}</text>`);
   }
 
   // multi-day events: bands, with as much of "icon title" as fits
