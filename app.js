@@ -229,15 +229,7 @@ function monthsCovered(a0, a1) {
    month lies by the day ring; another band in the same month gets its own
    lane, closer to the centre. Earlier (then longer) events go outermost. */
 function ribbons() {
-  const list = shownThisYear().filter((e) => e.kind === 'period').map((e) => {
-    const m0 = e.month - 1, m1 = e.endMonth - 1;
-    const d0 = clampDay(m0, e.day), d1 = clampDay(m1, e.endDay);
-    // from the start of the first day's cell to the end of the last day's cell
-    const c0 = cellStart(m0, d0);
-    let c1 = cellStart(m1, d1) + 30 / days[m1];
-    while (c1 <= c0) c1 += 360;
-    return { ev: e, a0: c0, a1: c1 };
-  });
+  const list = shownThisYear().filter((e) => e.kind === 'period').map((e) => ({ ev: e, ...periodArc(e) }));
   list.sort((p, q) => (p.ev.month - q.ev.month) || (p.ev.day - q.ev.day) || ((q.a1 - q.a0) - (p.a1 - p.a0)));
   const used = Array.from({ length: 12 }, () => new Set());
   for (const rb of list) {
@@ -561,24 +553,54 @@ function clampBox(b) {
   return { x, y, w, h: w };
 }
 
-function boxFor(v) {
-  if (v.t === 'full') return { ...FULL_BOX };
-  if (v.t === 'free') return clampBox(v.box);
-  const ptsList = [];
-  if (v.t === 'season') {
-    const mid = v.s * 90;
-    ptsList.push([C, C]);
-    for (let a = mid - 45; a <= mid + 45; a += 5) ptsList.push(pt(a, TODAY_OUT + 5));
-  } else {
-    for (let a = v.m * 30 - 15; a <= v.m * 30 + 15; a += 2.5) {
-      ptsList.push(pt(a, R_MON0 - 6), pt(a, TODAY_OUT + 5));
-    }
+/* Square box around an arc of the ring, from the month names to the outer edge. */
+function arcBox(a0, a1, withCore) {
+  const ptsList = withCore ? [[C, C]] : [];
+  const n = Math.max(2, Math.ceil((a1 - a0) / 2.5));
+  for (let i = 0; i <= n; i++) {
+    const a = a0 + (a1 - a0) * i / n;
+    if (withCore) ptsList.push(pt(a, TODAY_OUT + 5));
+    else ptsList.push(pt(a, R_MON0 - 6), pt(a, TODAY_OUT + 5));
   }
   const xs = ptsList.map((p) => p[0]), ys = ptsList.map((p) => p[1]);
   const x0 = Math.min(...xs) - 10, y0 = Math.min(...ys) - 10;
   const w = Math.max(...xs) + 10 - x0, h = Math.max(...ys) + 10 - y0;
   const side = Math.max(w, h);
   return { x: x0 - (side - w) / 2, y: y0 - (side - h) / 2, w: side, h: side };
+}
+
+/* The days a multi-day event covers, as an arc: start of its first cell to end of its last. */
+function periodArc(e) {
+  const m0 = e.month - 1, m1 = e.endMonth - 1;
+  const a0 = cellStart(m0, clampDay(m0, e.day));
+  let a1 = cellStart(m1, clampDay(m1, e.endDay)) + 30 / days[m1];
+  while (a1 <= a0) a1 += 360;
+  return { a0, a1 };
+}
+
+/* Where a tap on an event zooms to first: its month, or the whole band of a
+   multi-day event (a band inside one month: just that month). */
+function eventView(e) {
+  if (e.kind !== 'period') return { t: 'month', m: e.month - 1, sel: null };
+  const { a0, a1 } = periodArc(e);
+  const ms = monthsCovered(a0, a1);
+  if (ms.length === 1) return { t: 'month', m: ms[0], sel: null };
+  return { t: 'period', id: e.id };
+}
+
+function boxFor(v) {
+  if (v.t === 'full') return { ...FULL_BOX };
+  if (v.t === 'free') return clampBox(v.box);
+  if (v.t === 'season') return arcBox(v.s * 90 - 45, v.s * 90 + 45, true);
+  if (v.t === 'period') {
+    const e = items.find((x) => x.id === v.id);
+    if (!e || e.kind !== 'period') return { ...FULL_BOX };
+    let { a0, a1 } = periodArc(e);
+    if (a1 - a0 >= 300) return { ...FULL_BOX };
+    const grow = Math.max(4, (30 - (a1 - a0)) / 2);   // never closer than a month
+    return clampBox(arcBox(a0 - grow, a1 + grow, false));
+  }
+  return arcBox(v.m * 30 - 15, v.m * 30 + 15, false);
 }
 const sameBox = (a, b) => ['x', 'y', 'w', 'h'].every((k) => Math.abs(a[k] - b[k]) < 0.5);
 function setVB(b) {
@@ -601,6 +623,12 @@ function viewMonths(v) {
   if (v.t === 'season') {
     const ms = [0, 1, 2, 3, 4].map((i) => mod(v.s * 3 - 2 + i, 12));
     return ms;
+  }
+  if (v.t === 'period') {
+    const e = items.find((x) => x.id === v.id);
+    if (!e || e.kind !== 'period') return [...Array(12).keys()];
+    const { a0, a1 } = periodArc(e);
+    return [...new Set(monthsCovered(a0 - 30, a1 + 30))];
   }
   return [mod(v.m - 1, 12), v.m, mod(v.m + 1, 12)];
 }
@@ -880,13 +908,31 @@ function tapCard(id) {
   }
 }
 
+/* A tap on an event first zooms to it; only once it is in view does the tap act.
+   In view: the zoom it would go to, or a close free zoom that shows it whole. */
+function zoomToEvent(el) {
+  const id = el.dataset.id || el.dataset.period;
+  const e = items.find((x) => x.id === id);
+  if (!e) return false;
+  const v = eventView(e);
+  const same = v.t === view.t && (v.t === 'month' ? v.m === view.m : v.id === view.id);
+  if (same) return false;
+  if (view.t === 'free' && vb.w < NEAR_W) {
+    const r = el.getBoundingClientRect(), s = svg.getBoundingClientRect();
+    if (r.left >= s.left - 1 && r.right <= s.right + 1 && r.top >= s.top - 1 && r.bottom <= s.bottom + 1) return false;
+  }
+  if (e.kind === 'event') raiseIds([id]);
+  navigate(v);
+  return true;
+}
+
 function onTap(clientX, clientY) {
   const el = document.elementFromPoint(clientX, clientY);
   if (el && el.closest('[data-plus]')) { openForm(null, view.sel); return; }
   const card = el && el.closest('.card');
-  if (card) { tapCard(card.dataset.id); return; }
+  if (card) { if (!zoomToEvent(card)) tapCard(card.dataset.id); return; }
   const band = el && el.closest('[data-period]');
-  if (band) { openMenu(band.dataset.period); return; }
+  if (band) { if (!zoomToEvent(band)) openMenu(band.dataset.period); return; }
 
   const [x, y] = toSvg(clientX, clientY);
   const { r, a } = polar(x, y);
