@@ -201,6 +201,21 @@ legend {
   background: #f5f6f8;
 }
 .icons input:checked + span { border-color: var(--accent); background: #e4ecfb; }
+.colors {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(38px, 1fr));
+  gap: 8px;
+}
+.colors label { position: relative; }
+.colors input { position: absolute; opacity: 0; pointer-events: none; }
+.colors span {
+  display: block;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  border: 3px solid #fff;
+  box-shadow: 0 0 0 2px #d5dbe5;
+}
+.colors input:checked + span { box-shadow: 0 0 0 3px var(--ink); }
 
 .actions {
   display: grid;

@@ -18,7 +18,9 @@ const RV = R_DAY - 20;      // outer band (lane 0) radius
 const RV_W = 34;            // band width
 const RV_GAP = 6;           // gap between band lanes
 const MAX_LANES = 4;        // lanes towards the centre; more bands share the last one
-const RIBBON_COL = ['#6b9be0', '#6fbf55', '#ff9f1c', '#e88a3a'];   // by the start month's season
+const RIBBON_COL = ['#6b9be0', '#6fbf55', '#ff9f1c', '#e88a3a'];   // default: by the start month's season
+const BAND_COLORS = ['#ff9f1c', '#e88a3a', '#e0475b', '#e86aa6', '#8e6bd8', '#6b9be0', '#1fa89a', '#6fbf55', '#a0713d', '#7a7a7a'];
+const bandColor = (e) => e.color || RIBBON_COL[SEASON_OF[e.month - 1]];
 const TODAY_SCALE = 1.5;                   // today's cell and number vs. an ordinary day
 const TODAY_OUT = (R_DAY + R_OUT) / 2 + (R_OUT - R_DAY) * TODAY_SCALE / 2;   // its outer edge
 const FULL_BOX = { x: -45, y: -45, w: 1690, h: 1690 };
@@ -157,6 +159,7 @@ function sanitize(list) {
       out.endDay = e.endDay;
     }
     if (Number.isInteger(e.year)) out.year = e.year;
+    if (kind === 'period' && typeof e.color === 'string' && /^#[0-9a-f]{6}$/i.test(e.color)) out.color = e.color;
     return out;
   }).filter(Boolean);
 }
@@ -606,7 +609,7 @@ function renderBase() {
         if (textW(t, 800, fs) + fs * 0.08 * [...t].length <= room) { label = t; size = fs; break search; }
       }
     }
-    const col = RIBBON_COL[SEASON_OF[rb.ev.month - 1]];
+    const col = bandColor(rb.ev);
     out.push(`<g data-period="${esc(rb.ev.id)}">` +
       `<path d="M${f1(xs)},${f1(ys)} A${R},${R} 0 ${big} 1 ${f1(xe)},${f1(ye)}" stroke="${col}" stroke-width="${RV_W}" fill="none" stroke-linecap="round"/>` +
       (label ? `<text class="vac" dy="${f1(size * 0.36)}" style="font-size:${size}px;letter-spacing:${f1(size * 0.08)}px"><textPath href="#rib${i}" startOffset="50%" text-anchor="middle">${esc(label)}</textPath></text>` : '') +
@@ -903,6 +906,8 @@ function setupForm() {
   F.endMonth.addEventListener('change', () => fillDays(F.endDay, +F.endMonth.value, +F.endDay.value));
   $('iconGrid').innerHTML = EMOJIS.map((e, i) =>
     `<label><input type="radio" name="icon" value="${e}"${i === 0 ? ' checked' : ''}><span>${e}</span></label>`).join('');
+  $('colorGrid').innerHTML = BAND_COLORS.map((c) =>
+    `<label><input type="radio" name="color" value="${c}"><span style="background:${c}"></span></label>`).join('');
   $('formCancel').addEventListener('click', () => formDlg.close());
   F.multi.addEventListener('change', () => {
     setMultiMode(F.multi.checked);
@@ -914,6 +919,15 @@ function setupForm() {
     }
   });
   form.addEventListener('submit', onSave);
+}
+
+function pickColor(c) {
+  let r = [...form.querySelectorAll('input[name="color"]')].find((x) => x.value.toLowerCase() === c.toLowerCase());
+  if (!r) {   // a colour not in the set (e.g. a season default)
+    $('colorGrid').insertAdjacentHTML('afterbegin', `<label><input type="radio" name="color" value="${esc(c)}"><span style="background:${esc(c)}"></span></label>`);
+    r = form.querySelector('input[name="color"]');
+  }
+  r.checked = true;
 }
 
 function setMultiMode(on) {
@@ -947,6 +961,7 @@ function openForm(ev, date) {
   }
   match.checked = true;
   F.yearly.checked = !(ev && ev.year);
+  pickColor(ev && ev.kind === 'period' ? bandColor(ev) : RIBBON_COL[SEASON_OF[month - 1]]);
   formDlg.showModal();
   if (!ev) F.title.focus();
 }
@@ -968,6 +983,7 @@ function onSave(e) {
   if (isPeriod) {
     item.endMonth = +F.endMonth.value;
     item.endDay = +F.endDay.value;
+    item.color = form.querySelector('input[name="color"]:checked').value;
   }
   if (!F.yearly.checked) item.year = editing && editing.year ? editing.year : year;
   if (editing) items = items.map((x) => (x.id === editing.id ? item : x));
