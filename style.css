@@ -234,4 +234,3 @@ legend {
 
 /* period rows show only for the holiday band; event rows only for events */
 #eventForm:not(.is-period) .period-only { display: none; }
-#eventForm.is-period .event-only { display: none; }
