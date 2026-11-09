@@ -14,10 +14,10 @@ const R_DAY = 752;          // day-number ring: R_DAY..R_OUT
 const R_EV1 = 540;          // event zone: R_EV1..R_DAY
 const R_MON0 = 482;         // month-name ring: R_MON0..R_EV1
 const R_CORE = R_MON0;      // season pictures: 0..R_CORE
-const RV = R_DAY - 20;      // outer band (lane 0) radius
-const RV_W = 34;            // band width
+const RV = R_DAY - 29;      // outer band (lane 0) radius
+const RV_W = 51;            // band width
 const RV_GAP = 6;           // gap between band lanes
-const MAX_LANES = 4;        // lanes towards the centre; more bands share the last one
+const MAX_LANES = 3;        // lanes towards the centre; more bands share the last one
 const RIBBON_COL = ['#6b9be0', '#6fbf55', '#ff9f1c', '#e88a3a'];   // default: by the start month's season
 const BAND_COLORS = ['#ff9f1c', '#e88a3a', '#e0475b', '#e86aa6', '#8e6bd8', '#6b9be0', '#1fa89a', '#6fbf55', '#a0713d', '#7a7a7a'];
 const bandColor = (e) => e.color || RIBBON_COL[SEASON_OF[e.month - 1]];
@@ -25,6 +25,7 @@ const TODAY_SCALE = 1.5;                   // today's cell and number vs. an ord
 const TODAY_OUT = (R_DAY + R_OUT) / 2 + (R_OUT - R_DAY) * TODAY_SCALE / 2;   // its outer edge
 const FULL_BOX = { x: -45, y: -45, w: 1690, h: 1690 };
 const CARD_H = 66;
+const CARD_K = 1.5;         // cards are drawn this much larger than their base size
 const CARD_PX = 13;         // cards stop growing once their name is this many screen px
 const FONT = getComputedStyle(document.documentElement).getPropertyValue('--font').trim()
   || 'Inter, system-ui, Roboto, sans-serif';
@@ -289,7 +290,7 @@ function boxOk(m, b, r0, r1, n, rbs) {
 }
 
 function monthLabelSize(m) {
-  return [Math.max(textW(MONTHS[m], 800, 28), textW(MONTHS_PL[m], 600, 22)) + 10, 58];
+  return [Math.max(textW(MONTHS[m], 800, 42), textW(MONTHS_PL[m], 600, 33)) + 15, 87];
 }
 function labelCands(m, rbs) {
   const key = `L|${m}`;
@@ -358,7 +359,7 @@ function layoutMonth(m, evs, s, label, rbs) {
   const placed = [];
   const gap = 8 * s;
   for (const ev of evs) {
-    const w = cardBaseW(ev) * s, h = CARD_H * s;
+    const w = cardBaseW(ev) * s * CARD_K, h = CARD_H * s * CARD_K;
     const d = clampDay(m, ev.day);
     const [ax, ay] = pt(dateAngle(m, d), R_DAY);
     const scored = sortedCands(m, d, w, h, s, rbs, ax, ay)
@@ -586,8 +587,8 @@ function renderBase() {
   for (let m = 0; m < 12; m++) {
     const [x0, y0, w] = labels[m];
     const cx = x0 + w / 2;
-    out.push(`<text class="mon" x="${f1(cx)}" y="${f1(y0 + 27)}">${MONTHS[m]}</text>` +
-      `<text class="monpl" x="${f1(cx)}" y="${f1(y0 + 52)}">${MONTHS_PL[m]}</text>`);
+    out.push(`<text class="mon" x="${f1(cx)}" y="${f1(y0 + 40)}">${MONTHS[m]}</text>` +
+      `<text class="monpl" x="${f1(cx)}" y="${f1(y0 + 78)}">${MONTHS_PL[m]}</text>`);
   }
 
   // multi-day events: bands, with as much of "icon title" as fits
@@ -596,16 +597,20 @@ function renderBase() {
     const big = rb.a1 - rb.a0 > 180 ? 1 : 0;
     const [xs, ys] = pt(rb.a0, R), [xe, ye] = pt(rb.a1, R);
     const midA = mod((rb.a0 + rb.a1) / 2, 360);
+    // the text may run into the round caps, so its path reaches into them
+    const ext = (RV_W * 0.4) / R * 180 / Math.PI;
+    const [txs, tys] = pt(rb.a0 - ext, R), [txe, tye] = pt(rb.a1 + ext, R);
+    const tBig = rb.a1 - rb.a0 + 2 * ext > 180 ? 1 : 0;
     const textPath = midA > 90 && midA < 270
-      ? `M${f1(xe)},${f1(ye)} A${R},${R} 0 ${big} 0 ${f1(xs)},${f1(ys)}`
-      : `M${f1(xs)},${f1(ys)} A${R},${R} 0 ${big} 1 ${f1(xe)},${f1(ye)}`;
+      ? `M${f1(txe)},${f1(tye)} A${R},${R} 0 ${tBig} 0 ${f1(txs)},${f1(tys)}`
+      : `M${f1(txs)},${f1(tys)} A${R},${R} 0 ${tBig} 1 ${f1(txe)},${f1(tye)}`;
     defs.push(`<path id="rib${i}" d="${textPath}"/>`);
     const room = R * (rb.a1 - rb.a0) * Math.PI / 180 + RV_W * 0.8;
     const { icon, title } = rb.ev;
     // the longest label that fits, at the largest of three sizes
-    let label = '', size = 25;
+    let label = '', size = 37.5;
     search: for (const t of [`${icon} ${title}`, title, icon]) {
-      for (const fs of [25, 20, 16]) {
+      for (const fs of [37.5, 30, 24]) {
         if (textW(t, 800, fs) + fs * 0.08 * [...t].length <= room) { label = t; size = fs; break search; }
       }
     }
@@ -668,8 +673,8 @@ function renderOverlay() {
   }
   for (const c of cards) {
     const [x0, y0, w] = c.b;
-    const bw = w / c.s;
-    out.push(`<g class="card" data-id="${esc(c.ev.id)}" transform="translate(${f1(x0)},${f1(y0)}) scale(${c.s.toFixed(4)})">` +
+    const k = c.s * CARD_K, bw = w / k;
+    out.push(`<g class="card" data-id="${esc(c.ev.id)}" transform="translate(${f1(x0)},${f1(y0)}) scale(${k.toFixed(4)})">` +
       `<rect width="${f1(bw)}" height="${CARD_H}" rx="15" fill="#fff" stroke="${CARD_COL[SEASON_OF[c.m]]}" stroke-width="4" filter="url(#sh)"/>` +
       `<text class="emo" x="${f1(bw / 2)}" y="32">${esc(c.ev.icon)}</text>` +
       `<text class="ename" x="${f1(bw / 2)}" y="56">${esc(c.ev.title)}</text></g>`);
