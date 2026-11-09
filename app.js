@@ -290,7 +290,7 @@ function boxOk(m, b, r0, r1, n, rbs) {
 }
 
 function monthLabelSize(m) {
-  return [Math.max(textW(MONTHS[m], 800, 42), textW(MONTHS_PL[m], 600, 33)) + 15, 87];
+  return [Math.max(textW(MONTHS[m], 800, 33.6), textW(MONTHS_PL[m], 600, 26.4)) + 12, 70];
 }
 function labelCands(m, rbs) {
   const key = `L|${m}`;
@@ -422,7 +422,7 @@ function spreadOut(placed, s) {
       if (segHits(placed[i].ax, placed[i].ay, c.x, c.y, q.b, 4 * s)) cross++;
       if (segHits(q.ax, q.ay, q.cx, q.cy, c.b, 4 * s)) cross++;
     }
-    return o / (s * s) + 0.4 * L / s + 250 * cross + (worst > 0.45 ? 2e5 * (worst - 0.45) : 0);
+    return o / (s * s) + 1.0 * L / s + 250 * cross + (worst > 0.45 ? 2e5 * (worst - 0.45) : 0);
   };
   // simulated annealing over the candidate spots (fixed seed: the layout is repeatable)
   let seed = 12345;
@@ -445,7 +445,7 @@ function spreadOut(placed, s) {
       if (segHits(placed[i].ax, placed[i].ay, c.x, c.y, q.b, 4 * s)) cross++;
       if (segHits(placed[j].ax, placed[j].ay, q.x, q.y, c.b, 4 * s)) cross++;
     }
-    return o / (s * s) + 0.4 * L / s + 250 * cross + (worst > 0.45 ? 2e5 * (worst - 0.45) : 0);
+    return o / (s * s) + 1.0 * L / s + 250 * cross + (worst > 0.45 ? 2e5 * (worst - 0.45) : 0);
   };
   const movable = placed.map((p, i) => i).filter((i) => placed[i].scored.length);
   let now = total(), bestTotal = now, bestState = cur.map((c) => ({ ...c }));
@@ -516,14 +516,20 @@ function computeFull() {
   for (let m = 0; m < 12; m++) {
     const all = labelCands(m, rbs);
     if (!by[m].length) { labels[m] = all[0]; continue; }
-    const lc = all;
+    // The name hugs the inner edge of the ring and the cards take the outside.
+    // Only if the cards would then have no spot at all is the name moved outwards.
+    const rc = (b) => Math.hypot(b[0] + b[2] / 2 - C, b[1] + b[3] / 2 - C);
+    const r0 = Math.min(...all.map(rc));
     let best = null;
-    const step = Math.max(1, Math.floor(lc.length / 60));
-    for (let i = 0; i < lc.length; i += step) {
-      const pl = bestLayout(m, by[m], 1, lc[i], rbs);
-      const cost = layoutCost(pl, lc[i]);
-      if (!best || cost < best.cost) best = { cost, pl, lab: lc[i] };
-      if (best.cost < 1e5 && i >= 6 * step) break;   // everything fits: enough looking
+    for (const reach of [25, 60, 110, Infinity]) {
+      const lc = all.filter((b) => rc(b) <= r0 + reach);
+      best = null;
+      for (let i = 0; i < lc.length; i++) {
+        const pl = bestLayout(m, by[m], 1, lc[i], rbs);
+        const cost = layoutCost(pl, lc[i]);
+        if (!best || cost < best.cost) best = { cost, pl, lab: lc[i] };
+      }
+      if (best.cost < 1e8) break;
     }
     labels[m] = best.lab;
     fullCards.push(...best.pl);
@@ -683,8 +689,8 @@ function renderBase() {
   for (let m = 0; m < 12; m++) {
     const [x0, y0, w] = labels[m];
     const cx = x0 + w / 2;
-    out.push(`<text class="mon" x="${f1(cx)}" y="${f1(y0 + 40)}">${MONTHS[m]}</text>` +
-      `<text class="monpl" x="${f1(cx)}" y="${f1(y0 + 78)}">${MONTHS_PL[m]}</text>`);
+    out.push(`<text class="mon" x="${f1(cx)}" y="${f1(y0 + 32)}">${MONTHS[m]}</text>` +
+      `<text class="monpl" x="${f1(cx)}" y="${f1(y0 + 62)}">${MONTHS_PL[m]}</text>`);
   }
 
   // multi-day events: bands, with as much of "icon title" as fits
