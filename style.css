@@ -80,8 +80,12 @@ body {
 #wheel .emo   { font-size: 27px; }
 #wheel .ename { font-size: 22.1px; font-weight: 800; fill: #222; }
 #wheel .plus  { font-size: 20px; font-weight: 800; fill: #fff; dominant-baseline: central; }
-#wheel .card, #wheel [data-period], #wheel [data-plus] { cursor: pointer; }
+#wheel .card, #wheel [data-period], #wheel [data-plus], #wheel [data-act] { cursor: pointer; }
 #overlay { transition: opacity .15s; }
+/* the event whose menu is open */
+/* the picked event, in its own colour (--pick: the card frame or the band colour) */
+#wheel .picked { filter: drop-shadow(0 0 3px var(--pick)) drop-shadow(0 0 12px var(--pick)); }
+#wheel .card.picked rect { stroke-width: 7px; }
 #overlay.fading { opacity: 0; }
 
 .hint {
@@ -103,26 +107,28 @@ dialog {
   box-shadow: 0 12px 40px rgba(0, 0, 0, .25);
 }
 dialog::backdrop { background: rgba(0, 0, 0, .35); }
-
-.menu-head {
+/* "delete this event?" */
+dialog.confirm { width: min(88vw, 360px); }
+.confirm-head {
   font-size: 20px;
   font-weight: 800;
   text-align: center;
-  margin-bottom: 4px;
 }
-.menu-head small {
+.confirm-head small {
   display: block;
-  margin-top: 4px;
+  margin-top: 6px;
   font-size: 15px;
   font-weight: 600;
   color: var(--muted);
 }
-.menu-actions {
-  display: flex;
-  flex-direction: column;
+.confirm-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
   gap: 10px;
-  margin-top: 16px;
+  margin-top: 18px;
 }
+
+button { width: auto; padding: 8px 14px; background: #fff; color: #1f5fd1; }
 
 button {
   font: 700 18px var(--font);

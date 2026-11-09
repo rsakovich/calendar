@@ -578,6 +578,10 @@ let viewCards = [];
 let raised = [];          // ids brought to the front, last = topmost
 let animId = 0;
 let afterZoom = null;      // runs once the current zoom animation ends
+let pickId = null;         // the picked event: outlined, with its delete and edit buttons
+let pickTimer = 0;         // a tapped event gets picked a moment after the zoom to it ends
+const PICK_PAUSE = 250;    // ms between the end of that zoom and the pick
+function cancelPickTimer() { clearTimeout(pickTimer); pickTimer = 0; }
 
 const MIN_SIDE = 220;      // closest pinch zoom: svg units across the screen
 
@@ -693,6 +697,7 @@ function zoomDone() {
 }
 
 function setView(v) {
+  cancelPickTimer();   // any other zoom drops a pick still waiting
   view = v;
   const target = boxFor(v);
   renderChrome();
@@ -743,6 +748,8 @@ function goFull() {
 window.addEventListener('popstate', (e) => {
   closeDialogs();
   afterZoom = null;
+  cancelPickTimer();
+  unpick();
   setView((e.state && e.state.view) || { t: 'full' });
 });
 
@@ -816,7 +823,7 @@ function renderBase() {
       }
     }
     const col = bandColor(rb.ev);
-    out.push(`<g data-period="${esc(rb.ev.id)}">` +
+    out.push(`<g data-period="${esc(rb.ev.id)}" style="--pick:${col}">` +
       `<path d="M${f1(xs)},${f1(ys)} A${R},${R} 0 ${big} 1 ${f1(xe)},${f1(ye)}" stroke="${col}" stroke-width="${RV_W}" fill="none" stroke-linecap="round"/>` +
       (label ? `<text class="vac" dy="${f1(size * 0.36)}" style="font-size:${size}px;letter-spacing:${f1(size * 0.08)}px"><textPath href="#rib${i}" startOffset="50%" text-anchor="middle">${esc(label)}</textPath></text>` : '') +
       `</g>`);
@@ -863,6 +870,7 @@ function renderBase() {
   }
 
   baseG.innerHTML = `<defs>${defs.join('')}</defs>${out.join('')}`;
+  markPicked();
 }
 
 let renderedOrder = [];
@@ -882,14 +890,45 @@ function renderOverlay() {
   for (const c of cards) {
     const [x0, y0, w] = c.b;
     const k = c.s * CARD_K, bw = w / k;
-    out.push(`<g class="card" data-id="${esc(c.ev.id)}" transform="translate(${f1(x0)},${f1(y0)}) scale(${k.toFixed(4)})">` +
+    out.push(`<g class="card" style="--pick:${CARD_COL[SEASON_OF[c.m]]}" data-id="${esc(c.ev.id)}" transform="translate(${f1(x0)},${f1(y0)}) scale(${k.toFixed(4)})">` +
       `<rect width="${f1(bw)}" height="${CARD_H}" rx="15" fill="#fff" stroke="${CARD_COL[SEASON_OF[c.m]]}" stroke-width="4" filter="url(#sh)"/>` +
       `<text class="emo" x="${f1(bw / 2)}" y="32">${esc(c.ev.icon)}</text>` +
       `<text class="ename" x="${f1(bw / 2)}" y="62">${esc(c.ev.title)}</text></g>`);
   }
 
+  if (pickId !== null) out.push(pickButtons(cards));
   if (view.t === 'month' && view.sel) out.push(plusButton(view.sel));
   overlayG.innerHTML = out.join('');
+  markPicked();
+}
+
+/* The picked event's buttons, a constant size on screen: a red "×" (delete) at the
+   top right corner of its card and a pencil (edit) at the top left; on a band,
+   the pencil at its start and the "×" at its end. */
+function pickButtons(cards) {
+  const u = 1 / pxPerUnit();
+  const R = 19 * u, pad = 6 * u;
+  let p0, p1;
+  const c = cards.find((q) => q.ev.id === pickId);
+  if (c) {
+    const [x0, y0, w] = c.b;
+    p0 = [x0 + 4 * u, y0 + 4 * u];
+    p1 = [x0 + w - 4 * u, y0 + 4 * u];
+  } else {
+    const rb = ribbons().find((q) => q.ev.id === pickId);
+    if (!rb) return '';
+    p0 = pt(rb.a0, rb.r);
+    p1 = pt(rb.a1, rb.r);
+  }
+  const keep = ([x, y]) => [Math.min(Math.max(x, vb.x + R + pad), vb.x + vb.w - R - pad),
+    Math.min(Math.max(y, vb.y + R + pad), vb.y + vb.h - R - pad)];
+  const btn = (act, [x, y], fill, glyph) =>
+    `<g data-act="${act}" transform="translate(${f1(x)},${f1(y)}) scale(${u.toFixed(4)})">` +
+    `<circle r="19" fill="${fill}" stroke="#fff" stroke-width="3" filter="url(#sh)"/>${glyph}</g>`;
+  return btn('edit', keep(p0), '#1f5fd1',
+      '<path d="M-8,8 l2.5-7.5 l10-10 l5,5 l-10,10 z M2.5,-6.5 l5,5" fill="none" stroke="#fff" stroke-width="2.6" stroke-linejoin="round" stroke-linecap="round"/>') +
+    btn('del', keep(p1), '#e0475b',
+      '<path d="M-6.5,-6.5 L6.5,6.5 M6.5,-6.5 L-6.5,6.5" stroke="#fff" stroke-width="3.5" stroke-linecap="round"/>');
 }
 
 function plusButton({ m, d }) {
@@ -940,21 +979,23 @@ function raiseIds(ids) {
   raised = raised.filter((id) => !ids.includes(id)).concat(ids);
 }
 
-function tapCard(id) {
-  const i = renderedOrder.findIndex((c) => c.ev.id === id);
-  if (i < 0) return;
-  const me = renderedOrder[i];
-  const covered = renderedOrder.slice(i + 1).some((c) => overlapArea(c.b, me.b) > 0);
-  if (covered) {
-    raiseIds([id]);
-    renderOverlay();
-  } else {
-    openMenu(id);
-  }
+/* Pick an event: outline it (its card to the front) and show its delete and edit buttons. */
+function pick(id) {
+  const e = items.find((x) => x.id === id);
+  if (!e) return;
+  pickId = id;
+  if (e.kind === 'event') raiseIds([id]);
+  if (view.t === 'month' && view.sel) replaceView({ t: 'month', m: view.m, sel: null });   // no "+" beside it
+  else renderOverlay();
+}
+function unpick() {
+  if (pickId === null) return;
+  pickId = null;
+  renderOverlay();
 }
 
-/* A tap on an event zooms to it first, then opens its menu. Already in view
-   (the zoom it would go to, or a close free zoom that shows it whole): the tap acts at once. */
+/* A tap on an event zooms to it first and picks it a moment after. Already in view
+   (the zoom it would go to, or a close free zoom that shows it whole): it is picked at once. */
 function zoomToEvent(el) {
   const id = el.dataset.id || el.dataset.period;
   const e = items.find((x) => x.id === id);
@@ -966,19 +1007,30 @@ function zoomToEvent(el) {
     const r = el.getBoundingClientRect(), s = svg.getBoundingClientRect();
     if (r.left >= s.left - 1 && r.right <= s.right + 1 && r.top >= s.top - 1 && r.bottom <= s.bottom + 1) return false;
   }
-  if (e.kind === 'event') raiseIds([id]);
-  afterZoom = () => openMenu(id);
+  afterZoom = () => { pickTimer = setTimeout(() => { pickTimer = 0; pick(id); }, PICK_PAUSE); };
   navigate(v);
   return true;
 }
 
 function onTap(clientX, clientY) {
   const el = document.elementFromPoint(clientX, clientY);
-  if (el && el.closest('[data-plus]')) { openForm(null, view.sel); return; }
-  const card = el && el.closest('.card');
-  if (card) { if (!zoomToEvent(card)) tapCard(card.dataset.id); return; }
-  const band = el && el.closest('[data-period]');
-  if (band) { if (!zoomToEvent(band)) openMenu(band.dataset.period); return; }
+  const act = el && el.closest('[data-act]');
+  if (act) {
+    const ev = items.find((x) => x.id === pickId);
+    if (ev && act.dataset.act === 'del') deleteEvent(ev);
+    if (ev && act.dataset.act === 'edit') openForm(ev);
+    return;
+  }
+  if (el && el.closest('[data-plus]')) { unpick(); openForm(null, view.sel); return; }
+  const target = el && (el.closest('.card') || el.closest('[data-period]'));
+  if (target) {
+    const id = target.dataset.id || target.dataset.period;
+    if (id === pickId) return;
+    unpick();
+    if (!zoomToEvent(target)) pick(id);
+    return;
+  }
+  unpick();   // a tap anywhere else lets go of the picked event
 
   const [x, y] = toSvg(clientX, clientY);
   const { r, a } = polar(x, y);
@@ -1073,6 +1125,8 @@ function startPinch() {
 }
 
 svg.addEventListener('pointerdown', (e) => {
+  afterZoom = null;   // touching the wheel while a tap on an event is still under way: stop there
+  cancelPickTimer();
   pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
   if (pointers.size === 1) {
     gesture = { x: e.clientX, y: e.clientY, t: performance.now(), tap: true, mode: null };
@@ -1128,60 +1182,56 @@ svg.addEventListener('wheel', (e) => {
 
 $('back').addEventListener('click', goFull);
 
-/* ---------------- menu: edit / delete ---------------- */
+/* ---------------- delete (with undo) ---------------- */
 
-const menu = $('menu');
 const formDlg = $('form');
 
 function closeDialogs() {
-  if (menu.open) menu.close();
   if (formDlg.open) formDlg.close();
+  if (confirmDlg.open) confirmDlg.close();
 }
-for (const dlg of [menu, formDlg]) {
-  dlg.addEventListener('click', (e) => { if (e.target === dlg) dlg.close(); });
+formDlg.addEventListener('click', (e) => { if (e.target === formDlg) formDlg.close(); });
+
+/* The outline of the picked event, in its own colour. */
+function markPicked() {
+  for (const el of svg.querySelectorAll('.picked')) el.classList.remove('picked');
+  if (pickId === null) return;
+  for (const el of svg.querySelectorAll('.card, [data-period]')) {
+    if ((el.dataset.id || el.dataset.period) === pickId) el.classList.add('picked');
+  }
 }
 
-function describe(ev) {
+/* The "×" asks first, in a small window: "Удалить «…»?" with the date, Отмена / Удалить. */
+const confirmDlg = document.createElement('dialog');
+confirmDlg.className = 'confirm';
+confirmDlg.innerHTML = '<div class="confirm-head"></div>' +
+  '<div class="confirm-actions"><button type="button" data-no>Отмена</button>' +
+  '<button type="button" class="danger" data-yes>Удалить</button></div>';
+document.body.append(confirmDlg);
+confirmDlg.addEventListener('click', (e) => { if (e.target === confirmDlg) confirmDlg.close(); });
+confirmDlg.querySelector('[data-no]').addEventListener('click', () => confirmDlg.close());
+let confirmYes = null;
+confirmDlg.querySelector('[data-yes]').addEventListener('click', () => {
+  confirmDlg.close();
+  if (confirmYes) confirmYes();
+});
+
+function whenText(ev) {
   const start = dateText(ev.month - 1, ev.day);
-  if (ev.kind === 'period') return `${start} — ${dateText(ev.endMonth - 1, ev.endDay)}` + (ev.year ? `, только ${ev.year}` : '');
-  return (ev.approx ? 'примерно ' : '') + start + (ev.year ? `, только ${ev.year}` : ', каждый год');
+  return ev.kind === 'period' ? `${start} — ${dateText(ev.endMonth - 1, ev.endDay)}` : start;
 }
 
-function button(text, cls, onClick) {
-  const b = document.createElement('button');
-  b.type = 'button';
-  b.textContent = text;
-  if (cls) b.className = cls;
-  b.addEventListener('click', onClick);
-  return b;
-}
-
-function openMenu(id) {
-  const ev = items.find((e) => e.id === id);
-  if (!ev) return;
-  const head = $('menuHead'), actions = $('menuActions');
-  head.innerHTML = `${esc(ev.icon)} ${esc(ev.title)}<small>${esc(describe(ev))}</small>`;
-  const showMain = () => {
-    actions.replaceChildren(
-      button('Редактировать', 'primary', () => { menu.close(); openForm(ev); }),
-      button('Удалить', '', showConfirm),
-      button('Отмена', '', () => menu.close()),
-    );
+function deleteEvent(ev) {
+  confirmDlg.querySelector('.confirm-head').innerHTML =
+    `Удалить ${esc(ev.icon)} «${esc(ev.title)}»?<small>${esc(whenText(ev))}</small>`;
+  confirmYes = () => {
+    items = items.filter((e) => e !== ev);
+    raised = raised.filter((r) => r !== ev.id);
+    pickId = null;
+    saveItems();
+    rebuildAll();
   };
-  const showConfirm = () => {
-    actions.replaceChildren(
-      button(`Да, удалить «${ev.title}»`, 'danger', () => {
-        items = items.filter((e) => e.id !== id);
-        raised = raised.filter((r) => r !== id);
-        saveItems();
-        menu.close();
-        rebuildAll();
-      }),
-      button('Не удалять', '', showMain),
-    );
-  };
-  showMain();
-  menu.showModal();
+  confirmDlg.showModal();
 }
 
 /* ---------------- add / edit form ---------------- */
