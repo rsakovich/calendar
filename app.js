@@ -905,7 +905,7 @@ function renderOverlay() {
 
 /* The picked event's buttons, a constant size on screen: a red "×" (delete) at the
    top right corner of its card and a pencil (edit) at the top left; on a band,
-   the pencil at its start and the "×" at its end. */
+   the same way round on screen: the "×" at its right end, the pencil at its left. */
 function pickButtons(cards) {
   const u = 1 / pxPerUnit();
   const R = 19 * u, pad = 6 * u;
@@ -920,6 +920,7 @@ function pickButtons(cards) {
     if (!rb) return '';
     p0 = pt(rb.a0, rb.r);
     p1 = pt(rb.a1, rb.r);
+    if (p0[0] > p1[0]) [p0, p1] = [p1, p0];
   }
   const keep = ([x, y]) => [Math.min(Math.max(x, vb.x + R + pad), vb.x + vb.w - R - pad),
     Math.min(Math.max(y, vb.y + R + pad), vb.y + vb.h - R - pad)];
