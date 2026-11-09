@@ -320,7 +320,11 @@ function labelCands(m, rbs) {
   return out;
 }
 
-const cardBaseW = (ev) => Math.max(textW(ev.title, 800, ENAME_FS), 30) + 22;
+/* On a card, a title longer than "Начало школы" is cut short with "…" (the full one is in the form). */
+const CARD_TITLE_MAX = 'Начало школы'.length;
+const cardTitle = (ev) => ([...ev.title].length > CARD_TITLE_MAX
+  ? [...ev.title].slice(0, CARD_TITLE_MAX - 1).join('').trimEnd() + '…' : ev.title);
+const cardBaseW = (ev) => Math.max(textW(cardTitle(ev), 800, ENAME_FS), 30) + 22;
 
 /* A card may sit anywhere in the event zone (any month's), off the holiday bands. */
 const ringOk = (b, rbs) => boxOk(0, b, R_MON0 + 4, R_DAY - 4, 20, rbs, Infinity);
@@ -945,7 +949,7 @@ function renderOverlay() {
       `<g transform="translate(${f1(-bw / 2)},${-CARD_H / 2})">` +
       `<rect width="${f1(bw)}" height="${CARD_H}" rx="15" fill="#fff" stroke="${CARD_COL[SEASON_OF[c.m]]}" stroke-width="4" filter="url(#sh)"/>` +
       `<text class="emo" x="${f1(bw / 2)}" y="32">${esc(c.ev.icon)}</text>` +
-      `<text class="ename" x="${f1(bw / 2)}" y="62">${esc(c.ev.title)}</text></g></g>`);
+      `<text class="ename" x="${f1(bw / 2)}" y="62">${esc(cardTitle(c.ev))}</text></g></g>`);
   }
 
   if (pickId !== null) out.push(pickButtons(cards));
