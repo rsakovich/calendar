@@ -320,8 +320,9 @@ function labelCands(m, rbs) {
   return out;
 }
 
-/* On a card, a title longer than "Начало школы" is cut short with "…" (the full one is in the form). */
-const CARD_TITLE_MAX = 'Начало школы'.length;
+/* On a card, a title longer than 13 characters ("Rayman Retold") is cut short with "…"
+   (the full one is in the form). */
+const CARD_TITLE_MAX = 13;
 const cardTitle = (ev) => ([...ev.title].length > CARD_TITLE_MAX
   ? [...ev.title].slice(0, CARD_TITLE_MAX - 1).join('').trimEnd() + '…' : ev.title);
 const cardBaseW = (ev) => Math.max(textW(cardTitle(ev), 800, ENAME_FS), 30) + 22;
