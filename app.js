@@ -37,6 +37,7 @@ const CARD_REACH = 40;      // a card is looked for this many degrees either sid
 const CARD_DETOUR = 60;     // a card never sits further than this past its nearest spot: rather overlap
 const CARD_DETOUR_NEAR = 40; // the same when zoomed in, where cards should hug their dates more
                             // (both at full card size: they shrink with the cards)
+const NAME_OUT = 15, NAME_OUT_COST = 4;   // a month name steps out from the centre at most this far, each unit costing this much leader
 const NAME_DETOUR = 120;    // past this much further than the nearest spot, a card rather covers a month name
 const cardDetour = (s) => (s < 0.999 ? CARD_DETOUR_NEAR : CARD_DETOUR) * s;
 const CARD_AWAY = 1.5;      // a spot whose centre lies in another month counts as this many card heights further
@@ -527,13 +528,18 @@ function eventsByMonth() {
 let labels = [];         // month label boxes, chosen at full size
 let fullCards = [];      // card layout at full size
 
-/* Lower is better: cards with no spot off the names are the worst; otherwise leader
+/* Lower is better: cards covering a month name are the worst; otherwise leader
    length, a card partly covering another counting as STACK_COST longer: a card near its
    date, overlapping a neighbour, beats one far away. */
 const STACK_COST = 150;
+const NAME_COVER_COST = 1000;   // per unit² of a month name under a card
 function layoutCost(pl) {
   let k = 0;
-  for (const p of pl) k += (p.noSpot ? 1e8 : 0) + (p.stacked ? STACK_COST : 0) + Math.hypot(p.cx - p.ax, p.cy - p.ay);
+  for (const p of pl) {
+    // a card on a month name: the worst, by how much of the name it covers
+    const onName = p.noSpot ? labels.reduce((a, o) => a + overlapArea(p.b, o), 0) : 0;
+    k += NAME_COVER_COST * onName + (p.stacked ? STACK_COST : 0) + Math.hypot(p.cx - p.ax, p.cy - p.ay);
+  }
   return k;
 }
 
@@ -547,10 +553,12 @@ function computeFull() {
   for (let m = 0; m < 12; m++) home[m] = labelCands(m, rbs)[0];
   labels = [...home];
   let pl = bestLayout(evs, 1, rbs, labels, true);
-  // ...but a name that keeps a card away from its date may step aside along its month (never
-  // outwards: names always hug the centre), as long as that brings the cards nearer than it
-  // moves the name
-  const moved = (m, b) => 0.5 * Math.hypot(b[0] - home[m][0], b[1] - home[m][1]);
+  // ...but a name that keeps a card away from its date may step aside along its month (hardly
+  // outwards: names hug the centre), as long as that brings the cards nearer than it moves the
+  // name; a step outwards costs much more than one along the month
+  const rOf = (b) => polar(b[0] + b[2] / 2, b[1] + b[3] / 2).r;
+  const moved = (m, b) => 0.5 * Math.hypot(b[0] - home[m][0], b[1] - home[m][1]) +
+    NAME_OUT_COST * Math.max(0, rOf(b) - rOf(home[m]));
   const near = (m) => [-1, 0, 1].flatMap((k) => by[mod(m + k, 12)]);
   let budget = 1200;   // cards laid out in trials, in all (a count, not a time: the layout must not jump)
   for (let sweep = 0; sweep < 3 && budget > 0; sweep++) {
@@ -568,9 +576,9 @@ function computeFull() {
       let pick = keep;
       let cost = layoutCost(bestLayout(local, 1, rbs, labels, true)) + moved(m, keep);
       // up to 30 spots, spread over everything within reach
-      const rHome = polar(home[m][0] + home[m][2] / 2, home[m][1] + home[m][3] / 2).r;
-      const reach = labelCands(m, rbs).filter((b) => b !== keep && moved(m, b) <= 150 &&
-        polar(b[0] + b[2] / 2, b[1] + b[3] / 2).r <= rHome + 1);
+      // sideways only: a name in a tight spot may step out a little (NAME_OUT) to slide along
+      const reach = labelCands(m, rbs).filter((b) => b !== keep &&
+        0.5 * Math.hypot(b[0] - home[m][0], b[1] - home[m][1]) <= 150 && rOf(b) <= rOf(home[m]) + NAME_OUT);
       const step = Math.ceil(reach.length / 30);
       const cands = reach.filter((b, i) => i % step === 0);
       for (const lab of cands) {
