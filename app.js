@@ -655,10 +655,10 @@ function setVB(b) {
   svg.classList.toggle('far', b.w >= NEAR_W);   // year/season scale: hide day numbers
   liveCards(b);
 }
-/* While zooming (pinch, wheel, animation) the cards keep their size on screen, each about
+/* While zooming (pinch, wheel, animation) the cards follow cardScaleAt() on screen, each about
    its centre; once the zoom settles they are laid out again at that size. */
 function liveCards(b) {
-  const s = Math.min(1, b.w / FULL_BOX.w);
+  const s = cardScaleAt(b.w);
   for (const el of overlayG.querySelectorAll('.card')) {
     el.setAttribute('transform', `translate(${el.dataset.c}) scale(${(s * CARD_K).toFixed(4)})`);
   }
@@ -668,8 +668,15 @@ function liveCards(b) {
   }
 }
 const pxPerUnit = () => (svg.clientWidth || 360) / vb.w;
-/* Cards keep the on-screen size they have on the whole circle: zooming in does not enlarge them. */
-const cardScale = () => Math.min(1, vb.w / FULL_BOX.w);
+/* Card size (1 = full size, in circle units) for a view box of width w: on screen the cards
+   grow only a little while zooming in, up to CARD_NEAR_K times their whole-circle size once a
+   month (MONTH_W across) fills the screen. */
+const CARD_NEAR_K = 1.5, MONTH_W = 530;
+function cardScaleAt(w) {
+  const t = Math.min(1, Math.max(0, (FULL_BOX.w - w) / (FULL_BOX.w - MONTH_W)));
+  return Math.min(1, w / FULL_BOX.w * (1 + (CARD_NEAR_K - 1) * t));
+}
+const cardScale = () => cardScaleAt(vb.w);
 
 function viewMonths(v) {
   if (v.t === 'free') {          // every month with a part inside the box
