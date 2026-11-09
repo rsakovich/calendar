@@ -27,9 +27,14 @@ const TODAY_FAR_LEN = 1.3;                 // ...but its length across the ring 
 const NEAR_W = 900;                        // view box narrower than this = month scale: all numbers shown
 const TODAY_OUT = (R_DAY + R_OUT) / 2 + (R_OUT - R_DAY) * TODAY_FAR_LEN / 2;   // its outer edge
 const FULL_BOX = { x: -45, y: -45, w: 1690, h: 1690 };
-const CARD_H = 66;
+const CARD_H = 72;          // icon on top, name (ENAME_FS) under it
 const CARD_K = 1.5;         // cards are drawn this much larger than their base size
-const CARD_PX = 13;         // cards stop growing once their name is this many screen px
+const MON_FS = 43.7, MONPL_FS = 34.3;   // month names, Russian and Polish (also in style.css)
+const ENAME_FS = 22.1;      // card title (also in style.css); the icon stays 27
+const TODAY_NUM_K = 1.5;    // today's number is this much larger than the other day numbers
+const CARD_SPILL = 9;       // a card may reach this many degrees into a neighbouring month
+const SPILL_COST = 30;      // ...but each degree counts like this much longer leader line
+const CARD_PX = 16.9;       // cards stop growing once their name is this many screen px (30% over the old 13)
 const FONT = getComputedStyle(document.documentElement).getPropertyValue('--font').trim()
   || 'Inter, system-ui, Roboto, sans-serif';
 
@@ -229,15 +234,7 @@ function monthsCovered(a0, a1) {
    month lies by the day ring; another band in the same month gets its own
    lane, closer to the centre. Earlier (then longer) events go outermost. */
 function ribbons() {
-  const list = shownThisYear().filter((e) => e.kind === 'period').map((e) => {
-    const m0 = e.month - 1, m1 = e.endMonth - 1;
-    const d0 = clampDay(m0, e.day), d1 = clampDay(m1, e.endDay);
-    // from the start of the first day's cell to the end of the last day's cell
-    const c0 = cellStart(m0, d0);
-    let c1 = cellStart(m1, d1) + 30 / days[m1];
-    while (c1 <= c0) c1 += 360;
-    return { ev: e, a0: c0, a1: c1 };
-  });
+  const list = shownThisYear().filter((e) => e.kind === 'period').map((e) => ({ ev: e, ...periodArc(e) }));
   list.sort((p, q) => (p.ev.month - q.ev.month) || (p.ev.day - q.ev.day) || ((q.a1 - q.a0) - (p.a1 - p.a0)));
   const used = Array.from({ length: 12 }, () => new Set());
   for (const rb of list) {
@@ -263,9 +260,10 @@ function inRibbon(ang, r, pad, rbs) {
 
 /* ---------------- label placement ---------------- */
 
-/* Box b lies wholly in month m, between radii r0 and r1, and off the holiday band.
+/* Box b lies wholly in month m (or up to `spill` degrees past its sides), between
+   radii r0 and r1, and off the holiday band.
    The box never contains the centre, so its angular extent is set by its corners. */
-function boxOk(m, b, r0, r1, n, rbs) {
+function boxOk(m, b, r0, r1, n, rbs, spill = 0) {
   const [x0, y0, w, h] = b;
   const start = m * 30 - 15;
   let rmax = 0;
@@ -274,8 +272,8 @@ function boxOk(m, b, r0, r1, n, rbs) {
     const r = Math.sqrt(dx * dx + dy * dy);
     if (r >= r1) return false;
     if (r > rmax) rmax = r;
-    const rel = mod(Math.atan2(dx, -dy) * 57.29577951308232 - start, 360);
-    if (!(rel > 1 && rel < 29)) return false;
+    const rel = mod(Math.atan2(dx, -dy) * 57.29577951308232 - start + 180, 360) - 180;
+    if (!(rel > 1 - spill && rel < 29 + spill)) return false;
   }
   const rmin = Math.hypot(Math.max(x0 - C, 0, C - x0 - w), Math.max(y0 - C, 0, C - y0 - h));
   if (rmin <= r0) return false;
@@ -293,7 +291,17 @@ function boxOk(m, b, r0, r1, n, rbs) {
 }
 
 function monthLabelSize(m) {
-  return [Math.max(textW(MONTHS[m], 800, 33.6), textW(MONTHS_PL[m], 600, 26.4)) + 12, 70];
+  return [Math.max(textW(MONTHS[m], 800, MON_FS), textW(MONTHS_PL[m], 600, MONPL_FS)) + 12, 91];
+}
+/* Degrees by which box b reaches past the sides of month m's sector. */
+function spillOf(m, b) {
+  let worst = 0;
+  for (let k = 0; k < 4; k++) {
+    const dx = (k & 1 ? b[0] + b[2] : b[0]) - C, dy = (k & 2 ? b[1] + b[3] : b[1]) - C;
+    const rel = mod(Math.atan2(dx, -dy) * 57.29577951308232 - (m * 30 - 15) + 180, 360) - 180;
+    worst = Math.max(worst, 1 - rel, rel - 29);
+  }
+  return Math.max(0, worst);
 }
 function labelCands(m, rbs) {
   const key = `L|${m}`;
@@ -316,7 +324,7 @@ function labelCands(m, rbs) {
   return out;
 }
 
-const cardBaseW = (ev) => Math.max(textW(ev.title, 800, 17), 30) + 22;
+const cardBaseW = (ev) => Math.max(textW(ev.title, 800, ENAME_FS), 30) + 22;
 
 /* Candidate spots depend only on month, card size, zoom and the holiday bands,
    so they are kept between redraws: adding one event only measures its own size. */
@@ -336,7 +344,10 @@ function cardCands(m, w, h, s, rbs) {
     for (let r = R_MON0 + 4 + h / 2; r < R_DAY - 4 - h / 2 + 1e-6; r += rStep) {
       const [x, y] = pt(a, r);
       const b = [x - w / 2, y - h / 2, w, h];
-      if (boxOk(m, b, R_MON0 + 4, R_DAY - 4, 20, rbs)) out.push({ x, y, b });
+      if (!boxOk(m, b, R_MON0 + 4, R_DAY - 4, 20, rbs, CARD_SPILL)) continue;
+      // how far it reaches into a neighbouring month (0 = inside its own)
+      const sp = boxOk(m, b, R_MON0 + 4, R_DAY - 4, 20, rbs) ? 0 : spillOf(m, b);
+      out.push({ x, y, b, sp });
     }
   }
   candCache.set(key, out);
@@ -349,7 +360,7 @@ function sortedCands(m, d, w, h, s, rbs, ax, ay) {
   let out = candCache.get(key);
   if (!out) {
     out = cardCands(m, w, h, s, rbs)
-      .map((c) => ({ c, L: Math.hypot(c.x - ax, c.y - ay) }))
+      .map((c) => ({ c, L: Math.hypot(c.x - ax, c.y - ay) + SPILL_COST * c.sp * s }))
       .sort((p, q) => p.L - q.L);
     candCache.set(key, out);
   }
@@ -358,18 +369,23 @@ function sortedCands(m, d, w, h, s, rbs, ax, ay) {
 
 /* Greedy placement, earliest date first: each card takes the free spot with the
    shortest leader line. Cards with no free spot are stacked under the others. */
-function layoutMonth(m, evs, s, label, rbs, strict = true) {
+function layoutMonth(m, evs, s, label, rbs, strict = true, obst = []) {
   const placed = [];
   const gap = 4 * s;
   for (const ev of evs) {
     const w = cardBaseW(ev) * s * CARD_K, h = CARD_H * s * CARD_K;
     const d = clampDay(m, ev.day);
     const [ax, ay] = pt(dateAngle(m, d), R_DAY);
-    const scored = sortedCands(m, d, w, h, s, rbs, ax, ay)
-      .filter(({ c }) => !label || !ov(c.b, label, gap));
+    // spots off the month name and off the neighbours' names and cards; if there are none,
+    // the neighbours may be overlapped (as little as possible), and as a last resort the name too
+    const all = sortedCands(m, d, w, h, s, rbs, ax, ay);
+    const offLabel = all.filter(({ c }) => !label || !ov(c.b, label, gap));
+    let scored = offLabel.filter(({ c }) => !obst.some((o) => ov(c.b, o, gap)));
+    const noSpot = !scored.length;
+    if (noSpot) scored = offLabel.length ? offLabel : all;
     const free = placed.filter((p) => !p.stacked);
     let best = null;
-    for (const { c } of scored) {
+    for (const { c } of noSpot ? [] : scored) {
       if (free.some((p) => ov(c.b, p.b, gap))) continue;
       if (label && segHits(ax, ay, c.x, c.y, label, 3 * s)) continue;
       // leader lines normally keep clear of other cards; when space is short they may pass under them
@@ -386,7 +402,7 @@ function layoutMonth(m, evs, s, label, rbs, strict = true) {
       for (const limit of [0.45, 0.7, 1.01]) {
         for (const { c, L } of scored) {
           let o = 0, worst = 0;
-          for (const p of placed) {
+          for (const p of [...placed, ...obst.map((b) => ({ b }))]) {
             const a = overlapArea(c.b, p.b);
             o += a;
             worst = Math.max(worst, a / Math.min(c.b[2] * c.b[3], p.b[2] * p.b[3]));
@@ -402,9 +418,9 @@ function layoutMonth(m, evs, s, label, rbs, strict = true) {
         best = { x, y, b: [x - w / 2, y - h / 2, w, h] };
       }
     }
-    placed.push({ ev, m, d, b: best.b, cx: best.x, cy: best.y, ax, ay, stacked, s, scored, noSpot: !scored.length });
+    placed.push({ ev, m, d, b: best.b, cx: best.x, cy: best.y, ax, ay, stacked, s, scored, noSpot });
   }
-  if (placed.some((p) => p.stacked)) spreadOut(placed, s);
+  if (placed.some((p) => p.stacked)) spreadOut(placed, s, obst);
   for (const p of placed) delete p.scored;
   return placed;
 }
@@ -412,7 +428,7 @@ function layoutMonth(m, evs, s, label, rbs, strict = true) {
 /* Not everything fits: let the cards overlap as little as possible. Each card in
    turn moves to the spot (off the month name) that gives the least overlap with
    the others, no card ever being mostly hidden, then keeps a short leader line. */
-function spreadOut(placed, s) {
+function spreadOut(placed, s, obst = []) {
   const area = (b) => b[2] * b[3];
   const cost = (i, c, L) => {
     let o = 0, worst = 0, cross = 0;
@@ -448,6 +464,11 @@ function spreadOut(placed, s) {
       if (segHits(placed[i].ax, placed[i].ay, c.x, c.y, q.b, 4 * s)) cross++;
       if (segHits(placed[j].ax, placed[j].ay, q.x, q.y, c.b, 4 * s)) cross++;
     }
+    for (const b of obst) {
+      const a = overlapArea(c.b, b);
+      o += a;
+      worst = Math.max(worst, a / Math.min(area(c.b), area(b)));
+    }
     return o / (s * s) + 1.0 * L / s + 250 * cross + (worst > 0.45 ? 2e5 * (worst - 0.45) : 0);
   };
   const movable = placed.map((p, i) => i).filter((i) => placed[i].scored.length);
@@ -475,11 +496,11 @@ function spreadOut(placed, s) {
 
 /* Earliest date first; if a card ends up stacked, also try latest first and keep the better. */
 const countStacked = (pl) => pl.filter((p) => p.stacked).length;
-function bestLayout(m, evs, s, label, rbs) {
+function bestLayout(m, evs, s, label, rbs, obst = []) {
   let best = null;
   for (const strict of [true, false]) {
     for (const list of [evs, [...evs].reverse()]) {
-      const pl = layoutMonth(m, list, s, label, rbs, strict);
+      const pl = layoutMonth(m, list, s, label, rbs, strict, obst);
       if (!best || countStacked(pl) < countStacked(best)) best = pl;
       if (!countStacked(best)) return best;
       if (evs.length < 2) break;
@@ -510,29 +531,35 @@ function eventsByMonth() {
 let labels = [];         // month label boxes, chosen at full size
 let fullCards = [];      // card layout at full size
 
+/* Boxes the cards of month m must keep off: the names of the neighbouring
+   months and the cards already placed in them (cards may reach past a sector line). */
+function obstaclesFor(m, placed) {
+  const nb = [mod(m - 1, 12), mod(m + 1, 12)];
+  return [...nb.map((k) => labels[k]), ...placed.filter((c) => nb.includes(c.m)).map((c) => c.b)];
+}
+
 function computeFull() {
   const rbs = ribbons();
   syncCandCache(rbs);
   const by = eventsByMonth();
+  // every name hugs the inner edge of the ring; the cards take the outside
   labels = [];
+  for (let m = 0; m < 12; m++) labels[m] = labelCands(m, rbs)[0];
   fullCards = [];
+  const rc = (b) => Math.hypot(b[0] + b[2] / 2 - C, b[1] + b[3] / 2 - C);
   for (let m = 0; m < 12; m++) {
+    if (!by[m].length) continue;
+    // the name may shift a little (sideways, or a few steps out) to make room for the cards
     const all = labelCands(m, rbs);
-    if (!by[m].length) { labels[m] = all[0]; continue; }
-    // The name hugs the inner edge of the ring and the cards take the outside.
-    // Only if the cards would then have no spot at all is the name moved outwards.
-    const rc = (b) => Math.hypot(b[0] + b[2] / 2 - C, b[1] + b[3] / 2 - C);
-    const r0 = Math.min(...all.map(rc));
+    const r0 = rc(all[0]);
+    const obst = obstaclesFor(m, fullCards);
     let best = null;
-    for (const reach of [25, 60, 110, Infinity]) {
-      const lc = all.filter((b) => rc(b) <= r0 + reach);
-      best = null;
-      for (let i = 0; i < lc.length; i++) {
-        const pl = bestLayout(m, by[m], 1, lc[i], rbs);
-        const cost = layoutCost(pl, lc[i]);
-        if (!best || cost < best.cost) best = { cost, pl, lab: lc[i] };
-      }
-      if (best.cost < 1e8) break;
+    const near = all.filter((b) => rc(b) <= r0 + 12);
+    const free = near.filter((b) => !obst.some((o) => ov(b, o, 4)));   // off the neighbours' cards
+    for (const lab of free.length ? free : near) {
+      const pl = bestLayout(m, by[m], 1, lab, rbs, obst);
+      const cost = layoutCost(pl, lab);
+      if (!best || cost < best.cost) best = { cost, pl, lab };
     }
     labels[m] = best.lab;
     fullCards.push(...best.pl);
@@ -550,6 +577,7 @@ let vb = { ...FULL_BOX };
 let viewCards = [];
 let raised = [];          // ids brought to the front, last = topmost
 let animId = 0;
+let afterZoom = null;      // runs once the current zoom animation ends
 
 const MIN_SIDE = 220;      // closest pinch zoom: svg units across the screen
 
@@ -561,18 +589,14 @@ function clampBox(b) {
   return { x, y, w, h: w };
 }
 
-function boxFor(v) {
-  if (v.t === 'full') return { ...FULL_BOX };
-  if (v.t === 'free') return clampBox(v.box);
-  const ptsList = [];
-  if (v.t === 'season') {
-    const mid = v.s * 90;
-    ptsList.push([C, C]);
-    for (let a = mid - 45; a <= mid + 45; a += 5) ptsList.push(pt(a, TODAY_OUT + 5));
-  } else {
-    for (let a = v.m * 30 - 15; a <= v.m * 30 + 15; a += 2.5) {
-      ptsList.push(pt(a, R_MON0 - 6), pt(a, TODAY_OUT + 5));
-    }
+/* Square box around an arc of the ring, from the month names to the outer edge. */
+function arcBox(a0, a1, withCore) {
+  const ptsList = withCore ? [[C, C]] : [];
+  const n = Math.max(2, Math.ceil((a1 - a0) / 2.5));
+  for (let i = 0; i <= n; i++) {
+    const a = a0 + (a1 - a0) * i / n;
+    if (withCore) ptsList.push(pt(a, TODAY_OUT + 5));
+    else ptsList.push(pt(a, R_MON0 - 6), pt(a, TODAY_OUT + 5));
   }
   const xs = ptsList.map((p) => p[0]), ys = ptsList.map((p) => p[1]);
   const x0 = Math.min(...xs) - 10, y0 = Math.min(...ys) - 10;
@@ -580,13 +604,47 @@ function boxFor(v) {
   const side = Math.max(w, h);
   return { x: x0 - (side - w) / 2, y: y0 - (side - h) / 2, w: side, h: side };
 }
+
+/* The days a multi-day event covers, as an arc: start of its first cell to end of its last. */
+function periodArc(e) {
+  const m0 = e.month - 1, m1 = e.endMonth - 1;
+  const a0 = cellStart(m0, clampDay(m0, e.day));
+  let a1 = cellStart(m1, clampDay(m1, e.endDay)) + 30 / days[m1];
+  while (a1 <= a0) a1 += 360;
+  return { a0, a1 };
+}
+
+/* Where a tap on an event zooms to first: its month, or the whole band of a
+   multi-day event (a band inside one month: just that month). */
+function eventView(e) {
+  if (e.kind !== 'period') return { t: 'month', m: e.month - 1, sel: null };
+  const { a0, a1 } = periodArc(e);
+  const ms = monthsCovered(a0, a1);
+  if (ms.length === 1) return { t: 'month', m: ms[0], sel: null };
+  return { t: 'period', id: e.id };
+}
+
+function boxFor(v) {
+  if (v.t === 'full') return { ...FULL_BOX };
+  if (v.t === 'free') return clampBox(v.box);
+  if (v.t === 'season') return arcBox(v.s * 90 - 45, v.s * 90 + 45, true);
+  if (v.t === 'period') {
+    const e = items.find((x) => x.id === v.id);
+    if (!e || e.kind !== 'period') return { ...FULL_BOX };
+    let { a0, a1 } = periodArc(e);
+    if (a1 - a0 >= 300) return { ...FULL_BOX };
+    const grow = Math.max(4, (30 - (a1 - a0)) / 2);   // never closer than a month
+    return clampBox(arcBox(a0 - grow, a1 + grow, false));
+  }
+  return arcBox(v.m * 30 - 15, v.m * 30 + 15, false);
+}
 const sameBox = (a, b) => ['x', 'y', 'w', 'h'].every((k) => Math.abs(a[k] - b[k]) < 0.5);
 function setVB(b) {
   svg.setAttribute('viewBox', `${f1(b.x)} ${f1(b.y)} ${f1(b.w)} ${f1(b.h)}`);
   svg.classList.toggle('far', b.w >= NEAR_W);   // year/season scale: hide day numbers
 }
 const pxPerUnit = () => (svg.clientWidth || 360) / vb.w;
-const cardScale = () => Math.min(1, CARD_PX / (17 * pxPerUnit()));
+const cardScale = () => Math.min(1, CARD_PX / (ENAME_FS * pxPerUnit()));
 
 function viewMonths(v) {
   if (v.t === 'free') {          // every month with a part inside the box
@@ -601,6 +659,12 @@ function viewMonths(v) {
   if (v.t === 'season') {
     const ms = [0, 1, 2, 3, 4].map((i) => mod(v.s * 3 - 2 + i, 12));
     return ms;
+  }
+  if (v.t === 'period') {
+    const e = items.find((x) => x.id === v.id);
+    if (!e || e.kind !== 'period') return [...Array(12).keys()];
+    const { a0, a1 } = periodArc(e);
+    return [...new Set(monthsCovered(a0 - 30, a1 + 30))];
   }
   return [mod(v.m - 1, 12), v.m, mod(v.m + 1, 12)];
 }
@@ -618,8 +682,14 @@ function computeViewLayout() {
   const by = eventsByMonth();
   viewCards = [];
   for (const m of viewMonths(view)) {
-    if (by[m].length) viewCards.push(...bestLayout(m, by[m], s, labels[m], rbs));
+    if (by[m].length) viewCards.push(...bestLayout(m, by[m], s, labels[m], rbs, obstaclesFor(m, viewCards)));
   }
+}
+
+function zoomDone() {
+  const f = afterZoom;
+  afterZoom = null;
+  if (f) f();
 }
 
 function setView(v) {
@@ -629,6 +699,7 @@ function setView(v) {
   if (sameBox(target, vb)) {
     computeViewLayout();
     renderOverlay();
+    zoomDone();
     return;
   }
   const from = { ...vb };
@@ -649,6 +720,7 @@ function setView(v) {
     computeViewLayout();
     renderOverlay();
     overlayG.classList.remove('fading');
+    zoomDone();
   };
   requestAnimationFrame(step);
 }
@@ -670,6 +742,7 @@ function goFull() {
 }
 window.addEventListener('popstate', (e) => {
   closeDialogs();
+  afterZoom = null;
   setView((e.state && e.state.view) || { t: 'full' });
 });
 
@@ -715,8 +788,8 @@ function renderBase() {
   for (let m = 0; m < 12; m++) {
     const [x0, y0, w] = labels[m];
     const cx = x0 + w / 2;
-    out.push(`<text class="mon" x="${f1(cx)}" y="${f1(y0 + 32)}">${MONTHS[m]}</text>` +
-      `<text class="monpl" x="${f1(cx)}" y="${f1(y0 + 62)}">${MONTHS_PL[m]}</text>`);
+    out.push(`<text class="mon" x="${f1(cx)}" y="${f1(y0 + 42)}">${MONTHS[m]}</text>` +
+      `<text class="monpl" x="${f1(cx)}" y="${f1(y0 + 81)}">${MONTHS_PL[m]}</text>`);
   }
 
   // multi-day events: bands, with as much of "icon title" as fits
@@ -785,7 +858,7 @@ function renderBase() {
       const w = rMid * span * k * Math.PI / 180, h = (R_OUT - R_DAY) * len;
       out.push(`<g class="${cls}">` +
         `<rect x="${f1(-w / 2)}" y="${f1(-h / 2)}" width="${f1(w)}" height="${f1(h)}" rx="${f1(4 * k)}" transform="translate(${f1(x)},${f1(y)}) rotate(${f1(mid)})" fill="${fill}" stroke="#1d1d1f" stroke-width="${2 * k}"/>` +
-        `<text class="dnum now" style="fill:${ink};font-size:${f1(13.5 * k)}px" transform="translate(${f1(x)},${f1(y)}) rotate(${f1(rot)})">${d}</text></g>`);
+        `<text class="dnum now" style="fill:${ink};font-size:${f1(13.5 * TODAY_NUM_K * k)}px" transform="translate(${f1(x)},${f1(y)}) rotate(${f1(rot)})">${d}</text></g>`);
     }
   }
 
@@ -812,7 +885,7 @@ function renderOverlay() {
     out.push(`<g class="card" data-id="${esc(c.ev.id)}" transform="translate(${f1(x0)},${f1(y0)}) scale(${k.toFixed(4)})">` +
       `<rect width="${f1(bw)}" height="${CARD_H}" rx="15" fill="#fff" stroke="${CARD_COL[SEASON_OF[c.m]]}" stroke-width="4" filter="url(#sh)"/>` +
       `<text class="emo" x="${f1(bw / 2)}" y="32">${esc(c.ev.icon)}</text>` +
-      `<text class="ename" x="${f1(bw / 2)}" y="56">${esc(c.ev.title)}</text></g>`);
+      `<text class="ename" x="${f1(bw / 2)}" y="62">${esc(c.ev.title)}</text></g>`);
   }
 
   if (view.t === 'month' && view.sel) out.push(plusButton(view.sel));
@@ -880,13 +953,32 @@ function tapCard(id) {
   }
 }
 
+/* A tap on an event zooms to it first, then opens its menu. Already in view
+   (the zoom it would go to, or a close free zoom that shows it whole): the tap acts at once. */
+function zoomToEvent(el) {
+  const id = el.dataset.id || el.dataset.period;
+  const e = items.find((x) => x.id === id);
+  if (!e) return false;
+  const v = eventView(e);
+  const same = v.t === view.t && (v.t === 'month' ? v.m === view.m : v.id === view.id);
+  if (same) return false;
+  if (view.t === 'free' && vb.w < NEAR_W) {
+    const r = el.getBoundingClientRect(), s = svg.getBoundingClientRect();
+    if (r.left >= s.left - 1 && r.right <= s.right + 1 && r.top >= s.top - 1 && r.bottom <= s.bottom + 1) return false;
+  }
+  if (e.kind === 'event') raiseIds([id]);
+  afterZoom = () => openMenu(id);
+  navigate(v);
+  return true;
+}
+
 function onTap(clientX, clientY) {
   const el = document.elementFromPoint(clientX, clientY);
   if (el && el.closest('[data-plus]')) { openForm(null, view.sel); return; }
   const card = el && el.closest('.card');
-  if (card) { tapCard(card.dataset.id); return; }
+  if (card) { if (!zoomToEvent(card)) tapCard(card.dataset.id); return; }
   const band = el && el.closest('[data-period]');
-  if (band) { openMenu(band.dataset.period); return; }
+  if (band) { if (!zoomToEvent(band)) openMenu(band.dataset.period); return; }
 
   const [x, y] = toSvg(clientX, clientY);
   const { r, a } = polar(x, y);
