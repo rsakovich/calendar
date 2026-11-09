@@ -37,6 +37,7 @@ const CARD_REACH = 40;      // a card is looked for this many degrees either sid
 const CARD_DETOUR = 60;     // a card never sits further than this past its nearest spot: rather overlap
 const CARD_DETOUR_NEAR = 40; // the same when zoomed in, where cards should hug their dates more
                             // (both at full card size: they shrink with the cards)
+const NAME_DETOUR = 120;    // past this much further than the nearest spot, a card rather covers a month name
 const cardDetour = (s) => (s < 0.999 ? CARD_DETOUR_NEAR : CARD_DETOUR) * s;
 const CARD_AWAY = 1.5;      // a spot whose centre lies in another month counts as this many card heights further
 const CARD_AWAY_FULL = 0.3; // the same on the whole circle, where a card is wider than a few days and room is short
@@ -376,8 +377,11 @@ function layoutCards(evs, s, rbs, names, strict = true, quick = false) {
     // the nearest spot off the names; a free spot much further than that is too far:
     // then the card stays near its date and overlaps its neighbours instead
     const first = all.find(offName);
-    const maxL = (first ? first.L : 0) + cardDetour(s);
-    for (const q of all) {
+    // names never move outwards, so every spot near a date may be on one: then the card
+    // stays near its date anyway, covering as little of the name as it can
+    const onName = !first || first.L > (all.length ? all[0].L : 0) + NAME_DETOUR * s;
+    const maxL = (onName ? (all.length ? all[0].L : 0) : first.L) + cardDetour(s);
+    for (const q of onName ? [] : all) {
       const { c } = q;
       if (q.L > maxL) break;
       if (!offName(q)) continue;
@@ -392,19 +396,20 @@ function layoutCards(evs, s, rbs, names, strict = true, quick = false) {
     let stacked = false, noSpot = false, scored = null;
     if (!best) {
       stacked = true;
-      scored = all.filter((q) => q.L <= maxL && offName(q));
-      noSpot = !scored.length;
-      if (noSpot) scored = all;
+      scored = all.filter((q) => q.L <= maxL && (onName || offName(q)));
+      noSpot = onName || !scored.length;
+      if (!scored.length) scored = all;
+      const obst = onName ? [...placed.map((p) => p.b), ...nb] : placed.map((p) => p.b);
       if (quick) scored = scored.slice(0, 1);   // just counting: the nearest will do
       let bestScore = Infinity;
       // overlap is allowed, but no card may be mostly hidden: at most 45% of the smaller one
       for (const limit of [0.45, 0.7, 1.01]) {
         for (const { c, L } of scored) {
           let o = 0, worst = 0;
-          for (const p of placed) {
-            const a = overlapArea(c.b, p.b);
+          for (const b of obst) {
+            const a = overlapArea(c.b, b);
             o += a;
-            worst = Math.max(worst, a / Math.min(c.b[2] * c.b[3], p.b[2] * p.b[3]));
+            worst = Math.max(worst, a / Math.min(c.b[2] * c.b[3], b[2] * b[3]));
           }
           if (worst > limit) continue;
           const score = o / (s * s) + L / s;
@@ -500,9 +505,11 @@ function bestLayout(evs, s, rbs, names, quick = false) {
   }
   if (!quick && countStacked(best)) {
     for (const p of best) {
-      const off = sortedCands(dateAngle(p.m, p.d), p.b[2], p.b[3], s, rbs, p.ax, p.ay)
-        .filter(({ c }) => !names.some((o) => ov(c.b, o, 4 * s)));
-      p.scored = off.length ? off.filter((q) => q.L <= off[0].L + cardDetour(s)) : off;
+      const all = sortedCands(dateAngle(p.m, p.d), p.b[2], p.b[3], s, rbs, p.ax, p.ay);
+      const off = all.filter(({ c }) => !names.some((o) => ov(c.b, o, 4 * s)));
+      // as in layoutCards: when the nearest spot off the names is far, a name may be covered
+      const near = off.length && off[0].L <= all[0].L + NAME_DETOUR * s ? off : all;
+      p.scored = near.length ? near.filter((q) => q.L <= near[0].L + cardDetour(s)) : near;
     }
     spreadOut(best, s, names);
     for (const p of best) delete p.scored;
@@ -540,8 +547,9 @@ function computeFull() {
   for (let m = 0; m < 12; m++) home[m] = labelCands(m, rbs)[0];
   labels = [...home];
   let pl = bestLayout(evs, 1, rbs, labels, true);
-  // ...but a name that keeps a card away from its date may step aside (along its month, or
-  // outwards), as long as that brings the cards nearer than it moves the name
+  // ...but a name that keeps a card away from its date may step aside along its month (never
+  // outwards: names always hug the centre), as long as that brings the cards nearer than it
+  // moves the name
   const moved = (m, b) => 0.5 * Math.hypot(b[0] - home[m][0], b[1] - home[m][1]);
   const near = (m) => [-1, 0, 1].flatMap((k) => by[mod(m + k, 12)]);
   let budget = 1200;   // cards laid out in trials, in all (a count, not a time: the layout must not jump)
@@ -560,7 +568,9 @@ function computeFull() {
       let pick = keep;
       let cost = layoutCost(bestLayout(local, 1, rbs, labels, true)) + moved(m, keep);
       // up to 30 spots, spread over everything within reach
-      const reach = labelCands(m, rbs).filter((b) => b !== keep && moved(m, b) <= 150);
+      const rHome = polar(home[m][0] + home[m][2] / 2, home[m][1] + home[m][3] / 2).r;
+      const reach = labelCands(m, rbs).filter((b) => b !== keep && moved(m, b) <= 150 &&
+        polar(b[0] + b[2] / 2, b[1] + b[3] / 2).r <= rHome + 1);
       const step = Math.ceil(reach.length / 30);
       const cands = reach.filter((b, i) => i % step === 0);
       for (const lab of cands) {
