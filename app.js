@@ -653,6 +653,19 @@ const sameBox = (a, b) => ['x', 'y', 'w', 'h'].every((k) => Math.abs(a[k] - b[k]
 function setVB(b) {
   svg.setAttribute('viewBox', `${f1(b.x)} ${f1(b.y)} ${f1(b.w)} ${f1(b.h)}`);
   svg.classList.toggle('far', b.w >= NEAR_W);   // year/season scale: hide day numbers
+  liveCards(b);
+}
+/* While zooming (pinch, wheel, animation) the cards keep their size on screen, each about
+   its centre; once the zoom settles they are laid out again at that size. */
+function liveCards(b) {
+  const s = Math.min(1, b.w / FULL_BOX.w);
+  for (const el of overlayG.querySelectorAll('.card')) {
+    el.setAttribute('transform', `translate(${el.dataset.c}) scale(${(s * CARD_K).toFixed(4)})`);
+  }
+  for (const el of overlayG.querySelectorAll('.lead')) {
+    el.setAttribute('stroke-width', (2.5 * s).toFixed(2));
+    el.setAttribute('stroke-dasharray', `${(6 * s).toFixed(2)} ${(6 * s).toFixed(2)}`);
+  }
 }
 const pxPerUnit = () => (svg.clientWidth || 360) / vb.w;
 /* Cards keep the on-screen size they have on the whole circle: zooming in does not enlarge them. */
@@ -891,15 +904,17 @@ function renderOverlay() {
   renderedOrder = cards;
 
   for (const c of cards) {
-    out.push(`<line x1="${f1(c.ax)}" y1="${f1(c.ay)}" x2="${f1(c.cx)}" y2="${f1(c.cy)}" stroke="#6f6f6f" stroke-width="${(2.5 * c.s).toFixed(2)}" stroke-dasharray="${(6 * c.s).toFixed(2)} ${(6 * c.s).toFixed(2)}"/>`);
+    out.push(`<line class="lead" x1="${f1(c.ax)}" y1="${f1(c.ay)}" x2="${f1(c.cx)}" y2="${f1(c.cy)}" stroke="#6f6f6f" stroke-width="${(2.5 * c.s).toFixed(2)}" stroke-dasharray="${(6 * c.s).toFixed(2)} ${(6 * c.s).toFixed(2)}"/>`);
   }
   for (const c of cards) {
-    const [x0, y0, w] = c.b;
+    const w = c.b[2];
     const k = c.s * CARD_K, bw = w / k;
-    out.push(`<g class="card" style="--pick:${CARD_COL[SEASON_OF[c.m]]}" data-id="${esc(c.ev.id)}" transform="translate(${f1(x0)},${f1(y0)}) scale(${k.toFixed(4)})">` +
+    // scaled about its centre, so that liveCards() can keep its screen size while zooming
+    out.push(`<g class="card" style="--pick:${CARD_COL[SEASON_OF[c.m]]}" data-id="${esc(c.ev.id)}" data-c="${f1(c.cx)},${f1(c.cy)}" transform="translate(${f1(c.cx)},${f1(c.cy)}) scale(${k.toFixed(4)})">` +
+      `<g transform="translate(${f1(-bw / 2)},${-CARD_H / 2})">` +
       `<rect width="${f1(bw)}" height="${CARD_H}" rx="15" fill="#fff" stroke="${CARD_COL[SEASON_OF[c.m]]}" stroke-width="4" filter="url(#sh)"/>` +
       `<text class="emo" x="${f1(bw / 2)}" y="32">${esc(c.ev.icon)}</text>` +
-      `<text class="ename" x="${f1(bw / 2)}" y="62">${esc(c.ev.title)}</text></g>`);
+      `<text class="ename" x="${f1(bw / 2)}" y="62">${esc(c.ev.title)}</text></g></g>`);
   }
 
   if (pickId !== null) out.push(pickButtons(cards));
