@@ -21,8 +21,11 @@ const MAX_LANES = 3;        // lanes towards the centre; more bands share the la
 const RIBBON_COL = ['#6b9be0', '#6fbf55', '#ff9f1c', '#e88a3a'];   // default: by the start month's season
 const BAND_COLORS = ['#ff9f1c', '#e88a3a', '#e0475b', '#e86aa6', '#8e6bd8', '#6b9be0', '#1fa89a', '#6fbf55', '#a0713d', '#7a7a7a'];
 const bandColor = (e) => e.color || RIBBON_COL[SEASON_OF[e.month - 1]];
-const TODAY_SCALE = 1.5;                   // today's cell and number vs. an ordinary day
-const TODAY_OUT = (R_DAY + R_OUT) / 2 + (R_OUT - R_DAY) * TODAY_SCALE / 2;   // its outer edge
+const TODAY_SCALE = 1;                     // today's cell on the month scale: ordinary size, just framed
+const TODAY_FAR_SCALE = 2;                 // the same on the year and season scale (no other numbers): width, number
+const TODAY_FAR_LEN = 1.3;                 // ...but its length across the ring grows only this much
+const NEAR_W = 900;                        // view box narrower than this = month scale: all numbers shown
+const TODAY_OUT = (R_DAY + R_OUT) / 2 + (R_OUT - R_DAY) * TODAY_FAR_LEN / 2;   // its outer edge
 const FULL_BOX = { x: -45, y: -45, w: 1690, h: 1690 };
 const CARD_H = 66;
 const CARD_K = 1.5;         // cards are drawn this much larger than their base size
@@ -578,7 +581,10 @@ function boxFor(v) {
   return { x: x0 - (side - w) / 2, y: y0 - (side - h) / 2, w: side, h: side };
 }
 const sameBox = (a, b) => ['x', 'y', 'w', 'h'].every((k) => Math.abs(a[k] - b[k]) < 0.5);
-function setVB(b) { svg.setAttribute('viewBox', `${f1(b.x)} ${f1(b.y)} ${f1(b.w)} ${f1(b.h)}`); }
+function setVB(b) {
+  svg.setAttribute('viewBox', `${f1(b.x)} ${f1(b.y)} ${f1(b.w)} ${f1(b.h)}`);
+  svg.classList.toggle('far', b.w >= NEAR_W);   // year/season scale: hide day numbers
+}
 const pxPerUnit = () => (svg.clientWidth || 360) / vb.w;
 const cardScale = () => Math.min(1, CARD_PX / (17 * pxPerUnit()));
 
@@ -743,7 +749,8 @@ function renderBase() {
       `</g>`);
   });
 
-  // day cells and numbers
+  // day cells and numbers (the numbers show only on the month scale)
+  const nums = [];
   for (let m = 0; m < 12; m++) {
     const n = days[m], a0 = m * 30 - 15;
     for (let d = 1; d <= n; d++) {
@@ -757,23 +764,29 @@ function renderBase() {
       const rot = mod(am, 360) < 180 ? am - 90 : am + 90;
       const isHl = hl.has(`${m}-${d}`);
       if (isHl) out.push(`<path d="${sectorPath(c0 + 0.08, c0 + 30 / n - 0.08, R_DAY + 2, R_OUT - 2)}" fill="${HL_COL}"/>`);
-      out.push(`<text class="dnum${isHl ? ' hl' : ''}" transform="translate(${f1(x)},${f1(y)}) rotate(${f1(rot)})">${d}</text>`);
+      nums.push(`<text class="dnum${isHl ? ' hl' : ''}" transform="translate(${f1(x)},${f1(y)}) rotate(${f1(rot)})">${d}</text>`);
     }
   }
 
-  // today: the cell grown 1.5× around its own centre, dark frame, same fill;
-  // the number stays where it is, 1.5× larger
+  out.push(`<g class="daynums">${nums.join('')}</g>`);
+
+  // today: the cell grown around its own centre, dark rounded frame, same fill; the number
+  // stays where it is. ordinary size on the month scale, on the year and season scale 2× as wide but only 1.3× as long.
   {
     const { m, d } = today;
-    const span = 30 / days[m], mid = cellStart(m, d) + span / 2, half = span * TODAY_SCALE / 2;
-    const rMid = (R_DAY + R_OUT) / 2, rHalf = (R_OUT - R_DAY) * TODAY_SCALE / 2;
+    const span = 30 / days[m], mid = cellStart(m, d) + span / 2;
+    const rMid = (R_DAY + R_OUT) / 2;
     const isHl = hl.has(`${m}-${d}`);
     const [x, y] = pt(mid, rMid);
     const rot = mod(mid, 360) < 180 ? mid - 90 : mid + 90;
-    // the cell is so narrow that a rotated rounded rectangle matches the ring's curve
-    const w = rMid * 2 * half * Math.PI / 180, h = 2 * rHalf;
-    out.push(`<rect x="${f1(-w / 2)}" y="${f1(-h / 2)}" width="${f1(w)}" height="${f1(h)}" rx="6" transform="translate(${f1(x)},${f1(y)}) rotate(${f1(mid)})" fill="${isHl ? HL_COL : DAY_COL[SEASON_OF[m]]}" stroke="#1d1d1f" stroke-width="3"/>`);
-    out.push(`<text class="dnum now" fill="${isHl ? '#fff' : '#1d1d1f'}" style="fill:${isHl ? '#fff' : '#1d1d1f'}" transform="translate(${f1(x)},${f1(y)}) rotate(${f1(rot)})">${d}</text>`);
+    const fill = isHl ? HL_COL : DAY_COL[SEASON_OF[m]], ink = isHl ? '#fff' : '#1d1d1f';
+    for (const [cls, k, len] of [['today-near', TODAY_SCALE, TODAY_SCALE], ['today-far', TODAY_FAR_SCALE, TODAY_FAR_LEN]]) {
+      // the cell is so narrow that a rotated rounded rectangle matches the ring's curve
+      const w = rMid * span * k * Math.PI / 180, h = (R_OUT - R_DAY) * len;
+      out.push(`<g class="${cls}">` +
+        `<rect x="${f1(-w / 2)}" y="${f1(-h / 2)}" width="${f1(w)}" height="${f1(h)}" rx="${f1(4 * k)}" transform="translate(${f1(x)},${f1(y)}) rotate(${f1(mid)})" fill="${fill}" stroke="#1d1d1f" stroke-width="${2 * k}"/>` +
+        `<text class="dnum now" style="fill:${ink};font-size:${f1(13.5 * k)}px" transform="translate(${f1(x)},${f1(y)}) rotate(${f1(rot)})">${d}</text></g>`);
+    }
   }
 
   baseG.innerHTML = `<defs>${defs.join('')}</defs>${out.join('')}`;
