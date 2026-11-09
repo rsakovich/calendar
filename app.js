@@ -330,10 +330,10 @@ function cardCands(m, w, h, s, rbs) {
   out = [];
   const aStep = Math.max(0.5, s), rStep = Math.max(3, 8 * s);
   for (let a = m * 30 - 14; a <= m * 30 + 14 + 1e-6; a += aStep) {
-    for (let r = R_EV1 + 8 + h / 2; r < R_DAY - 8 - h / 2 + 1e-6; r += rStep) {
+    for (let r = R_MON0 + 8 + h / 2; r < R_DAY - 8 - h / 2 + 1e-6; r += rStep) {
       const [x, y] = pt(a, r);
       const b = [x - w / 2, y - h / 2, w, h];
-      if (boxOk(m, b, R_EV1 + 8, R_DAY - 8, 20, rbs)) out.push({ x, y, b });
+      if (boxOk(m, b, R_MON0 + 8, R_DAY - 8, 20, rbs)) out.push({ x, y, b });
     }
   }
   candCache.set(key, out);
@@ -395,13 +395,27 @@ function layoutMonth(m, evs, s, label, rbs) {
 }
 
 /* Earliest date first; if a card ends up stacked, also try latest first and keep the better. */
-function bestLayout(m, evs, s, label, rbs) {
-  const count = (pl) => pl.filter((p) => p.stacked).length;
+const SHRINK = [1, 0.88, 0.77, 0.67, 0.58];
+const countStacked = (pl) => pl.filter((p) => p.stacked).length;
+function layoutAt(m, evs, s, label, rbs) {
   const fwd = layoutMonth(m, evs, s, label, rbs);
-  if (!count(fwd) || evs.length < 2) return fwd;
+  if (!countStacked(fwd) || evs.length < 2) return fwd;
   const back = layoutMonth(m, [...evs].reverse(), s, label, rbs);
-  return count(back) < count(fwd) ? back : fwd;
+  return countStacked(back) < countStacked(fwd) ? back : fwd;
 }
+/* If the month's cards do not all fit at this size, make them (all of the
+   month alike) a little smaller until they do; keep the best attempt. */
+function bestLayout(m, evs, s, label, rbs) {
+  let best = null;
+  for (const f of SHRINK) {
+    const pl = layoutAt(m, evs, s * f, label, rbs);
+    if (!best || countStacked(pl) < countStacked(best)) best = pl;
+    if (!countStacked(pl)) break;
+  }
+  return best;
+}
+const layoutCost = (pl, s) => countStacked(pl) * 1e6 - (pl.length ? pl[0].s / s : 1) * 1e4
+  + pl.reduce((a, p) => a + Math.hypot(p.cx - p.ax, p.cy - p.ay), 0);
 
 function eventsByMonth() {
   const by = Array.from({ length: 12 }, () => []);
@@ -423,11 +437,12 @@ function computeFull() {
     const lc = labelCands(m, rbs);
     if (!by[m].length) { labels[m] = lc[0]; continue; }
     let best = null;
-    for (let i = 0; i < Math.min(lc.length, 8); i++) {
+    const step = Math.max(1, Math.floor(lc.length / 24));
+    for (let i = 0; i < lc.length; i += step) {
       const pl = bestLayout(m, by[m], 1, lc[i], rbs);
-      const st = pl.filter((p) => p.stacked).length;
-      if (!best || st < best.st) best = { st, pl, lab: lc[i] };
-      if (st === 0) break;
+      const cost = layoutCost(pl, 1);
+      if (!best || cost < best.cost) best = { cost, pl, lab: lc[i] };
+      if (best.cost < 0 && i >= 6 * step) break;   // everything fits at full size: enough looking
     }
     labels[m] = best.lab;
     fullCards.push(...best.pl);
