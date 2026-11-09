@@ -37,7 +37,6 @@ const CARD_DETOUR = 60;     // a card never sits further than this past its near
 const CARD_DETOUR_NEAR = 40; // the same when zoomed in, where cards should hug their dates more
                             // (both at full card size: they shrink with the cards)
 const cardDetour = (s) => (s < 0.999 ? CARD_DETOUR_NEAR : CARD_DETOUR) * s;
-const CARD_PX = 20;         // zoomed in, cards shrink so that their name is at most this many screen px
 const CARD_AWAY = 1.5;      // a spot whose centre lies in another month counts as this many card heights further
 const FONT = getComputedStyle(document.documentElement).getPropertyValue('--font').trim()
   || 'Inter, system-ui, Roboto, sans-serif';
@@ -656,7 +655,8 @@ function setVB(b) {
   svg.classList.toggle('far', b.w >= NEAR_W);   // year/season scale: hide day numbers
 }
 const pxPerUnit = () => (svg.clientWidth || 360) / vb.w;
-const cardScale = () => Math.min(1, CARD_PX / (ENAME_FS * CARD_K * pxPerUnit()));
+/* Cards keep the on-screen size they have on the whole circle: zooming in does not enlarge them. */
+const cardScale = () => Math.min(1, vb.w / FULL_BOX.w);
 
 function viewMonths(v) {
   if (v.t === 'free') {          // every month with a part inside the box
