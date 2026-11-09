@@ -445,8 +445,19 @@ let viewCards = [];
 let raised = [];          // ids brought to the front, last = topmost
 let animId = 0;
 
+const MIN_SIDE = 220;      // closest pinch zoom: svg units across the screen
+
+/* Keep a square view box between MIN_SIDE and the whole circle, never past its edges. */
+function clampBox(b) {
+  const w = Math.min(FULL_BOX.w, Math.max(MIN_SIDE, b.w));
+  const x = Math.min(Math.max(b.x, FULL_BOX.x), FULL_BOX.x + FULL_BOX.w - w);
+  const y = Math.min(Math.max(b.y, FULL_BOX.y), FULL_BOX.y + FULL_BOX.h - w);
+  return { x, y, w, h: w };
+}
+
 function boxFor(v) {
   if (v.t === 'full') return { ...FULL_BOX };
+  if (v.t === 'free') return clampBox(v.box);
   const ptsList = [];
   if (v.t === 'season') {
     const mid = v.s * 90;
@@ -469,6 +480,15 @@ const pxPerUnit = () => (svg.clientWidth || 360) / vb.w;
 const cardScale = () => Math.min(1, CARD_PX / (17 * pxPerUnit()));
 
 function viewMonths(v) {
+  if (v.t === 'free') {          // every month with a part inside the box
+    const b = v.box, inBox = ([x, y]) => x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h;
+    return [...Array(12).keys()].filter((m) => {
+      for (let a = m * 30 - 15; a <= m * 30 + 15; a += 3) {
+        for (const r of [R_MON0, R_EV1, R_DAY, R_OUT]) if (inBox(pt(a, r))) return true;
+      }
+      return false;
+    });
+  }
   if (v.t === 'season') {
     const ms = [0, 1, 2, 3, 4].map((i) => mod(v.s * 3 - 2 + i, 12));
     return ms;
@@ -701,7 +721,7 @@ function renderChrome() {
   $('back').hidden = view.t === 'full';
   $('hint').textContent = view.t === 'full'
     ? 'Нажми на сезон, месяц или число'
-    : view.t === 'season'
+    : view.t === 'season' || view.t === 'free'
       ? 'Нажми на месяц или число'
       : view.sel ? 'Нажми «+», чтобы добавить событие' : 'Нажми на число';
 }
@@ -775,7 +795,8 @@ function onTap(clientX, clientY) {
   else navigate({ t: 'month', m, sel: null });
 }
 
-/* Single taps, double tap (back to the whole circle), pinch (same). */
+/* Taps, double tap (back to the whole circle), and map-like zoom:
+   pinch zooms around the fingers from any view, one finger drags a zoomed circle. */
 const pointers = new Map();
 let gesture = null;
 let lastTap = null, tapTimer = 0;
@@ -794,38 +815,104 @@ function handleTap(x, y) {
   tapTimer = setTimeout(() => { lastTap = null; onTap(x, y); }, 260);
 }
 
+function stopAnimation() {
+  animId++;
+  overlayG.classList.remove('fading');
+}
+/* svg point under a screen point, for the view box b */
+function svgAt(b, clientX, clientY) {
+  const r = svg.getBoundingClientRect();
+  return [b.x + (clientX - r.left) / r.width * b.w, b.y + (clientY - r.top) / r.height * b.h];
+}
+/* the box of width w that keeps svg point (px, py) under screen point (clientX, clientY) */
+function boxKeeping(px, py, clientX, clientY, w) {
+  const r = svg.getBoundingClientRect();
+  w = Math.min(FULL_BOX.w, Math.max(MIN_SIDE, w));
+  return clampBox({ x: px - (clientX - r.left) / r.width * w, y: py - (clientY - r.top) / r.height * w, w, h: w });
+}
+
+/* After a pinch, drag or wheel: the circle stays where the fingers left it. */
+function commitFree() {
+  if (vb.w >= FULL_BOX.w - 1) {
+    vb = { ...FULL_BOX };
+    setVB(vb);
+    if (view.t !== 'full') goFull();
+    else { computeViewLayout(); renderOverlay(); }
+    return;
+  }
+  const v = { t: 'free', box: { ...vb } };
+  if (depth() === 0) history.pushState({ depth: 1, view: v }, '');
+  else history.replaceState({ depth: depth(), view: v }, '');
+  view = v;
+  renderChrome();
+  computeViewLayout();
+  renderOverlay();
+}
+
+function startPinch() {
+  const [p, q] = [...pointers.values()];
+  const mx = (p.x + q.x) / 2, my = (p.y + q.y) / 2;
+  stopAnimation();
+  gesture.tap = false;
+  gesture.mode = 'pinch';
+  gesture.d0 = Math.max(1, Math.hypot(p.x - q.x, p.y - q.y));
+  gesture.w0 = vb.w;
+  [gesture.px, gesture.py] = svgAt(vb, mx, my);
+}
+
 svg.addEventListener('pointerdown', (e) => {
   pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
   if (pointers.size === 1) {
-    gesture = { x: e.clientX, y: e.clientY, t: performance.now(), tap: true, d0: 0 };
-  } else if (gesture) {
-    gesture.tap = false;
-    const [p, q] = [...pointers.values()];
-    gesture.d0 = Math.hypot(p.x - q.x, p.y - q.y);
+    gesture = { x: e.clientX, y: e.clientY, t: performance.now(), tap: true, mode: null };
+  } else if (pointers.size === 2 && gesture) {
+    startPinch();
   }
 });
 svg.addEventListener('pointermove', (e) => {
   if (!pointers.has(e.pointerId) || !gesture) return;
   pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
-  if (pointers.size >= 2 && gesture.d0 > 0) {
+  if (gesture.mode === 'pinch') {
+    if (pointers.size < 2) return;
     const [p, q] = [...pointers.values()];
-    if (Math.hypot(p.x - q.x, p.y - q.y) < gesture.d0 * 0.8) {
-      gesture.d0 = 0;
-      goFull();
-    }
-  } else if (Math.hypot(e.clientX - gesture.x, e.clientY - gesture.y) > 12) {
-    gesture.tap = false;
+    const d = Math.max(1, Math.hypot(p.x - q.x, p.y - q.y));
+    vb = boxKeeping(gesture.px, gesture.py, (p.x + q.x) / 2, (p.y + q.y) / 2, gesture.w0 * gesture.d0 / d);
+    setVB(vb);
+    return;
   }
+  const moved = Math.hypot(e.clientX - gesture.x, e.clientY - gesture.y) > 12;
+  if (!moved && !gesture.mode) return;
+  gesture.tap = false;
+  if (vb.w >= FULL_BOX.w - 1) return;            // nothing to drag at full size
+  if (!gesture.mode) {
+    stopAnimation();
+    gesture.mode = 'pan';
+    [gesture.px, gesture.py] = svgAt(vb, gesture.x, gesture.y);
+  }
+  vb = boxKeeping(gesture.px, gesture.py, e.clientX, e.clientY, vb.w);
+  setVB(vb);
 });
 function pointerEnd(e) {
   if (!pointers.delete(e.pointerId)) return;
   if (pointers.size > 0 || !gesture) return;
   const g = gesture;
   gesture = null;
+  if (g.mode) { commitFree(); return; }
   if (e.type === 'pointerup' && g.tap && performance.now() - g.t < 600) handleTap(e.clientX, e.clientY);
 }
 svg.addEventListener('pointerup', pointerEnd);
 svg.addEventListener('pointercancel', pointerEnd);
+
+/* mouse wheel / trackpad: the same zoom, around the pointer */
+let wheelTimer = 0;
+svg.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  stopAnimation();
+  const [px, py] = svgAt(vb, e.clientX, e.clientY);
+  vb = boxKeeping(px, py, e.clientX, e.clientY, vb.w * Math.exp(e.deltaY * 0.0015));
+  setVB(vb);
+  clearTimeout(wheelTimer);
+  wheelTimer = setTimeout(commitFree, 200);
+}, { passive: false });
 
 $('back').addEventListener('click', goFull);
 
